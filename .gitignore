@@ -1,0 +1,7 @@
+/target
+vendor/
+node_modules/
+*.node
+napi/generated/
+bench/*.out
+Cargo.lock.bak

@@ -1,0 +1,23 @@
+[package]
+name = "braces-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+description = "Pure-Rust port of micromatch/braces v3 (brace expansion) — no napi, no runtime deps"
+license = "MIT"
+
+[lib]
+name = "braces_core"
+path = "src/lib.rs"
+
+[dependencies]
+# Intentionally zero runtime dependencies (LEARNINGS.md #18): hand-rolled
+# byte scanner, no regex crate, no parser framework.
+
+[dev-dependencies]
+serde_json = "1.0"
+divan = "0.1"
+
+[[bench]]
+name = "expand_bench"
+harness = false

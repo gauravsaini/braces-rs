@@ -1,0 +1,4 @@
+# Pinned per LEARNINGS.md #13 (sense-engine lesson: cross-machine version
+# skew is real in this setup — the dev box runs rustc 1.98.1).
+[toolchain]
+channel = "1.98.1"

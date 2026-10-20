@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/braces-core", "crates/braces-napi"]
+
+# Release profile: copied from the ajv-napi learnings (LEARNINGS.md #11).
+# lto="fat" + codegen-units=1 maximise cross-crate inlining for the tiny hot
+# core; strip shrinks the .node binary. panic stays "unwind" (default):
+# napi-rs converts unwinding panics into JS exceptions, while panic="abort"
+# would take down the whole Node process on any core bug.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.test]
+opt-level = 2
