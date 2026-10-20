@@ -36,7 +36,15 @@ fn seg_of(s: &[u16]) -> Seg {
 #[derive(Debug)]
 enum RopeNode {
     Leaf(Seg),
-    Concat { l: u32, r: u32 },
+    Concat {
+        l: u32,
+        r: u32,
+        len: usize,
+        /// Lazily materialised subtree bytes (pack path only): shared
+        /// prefixes of multi-group expansions are traversed once per
+        /// suffix combination, so caching pays for itself immediately.
+        cache: RefCell<Option<Seg>>,
+    },
 }
 
 /// Bump-allocated rope-node arena, one per expand call (the V8
@@ -133,12 +141,18 @@ impl Rope {
         }
         let l = self.idx;
         let r = self.other_idx(other);
+        let len = self.len + other.len;
         let mut out = Rope {
             arena: Some(self.arena()),
             idx: 0,
-            len: self.len + other.len,
+            len,
         };
-        out.idx = out.alloc_node(RopeNode::Concat { l, r });
+        out.idx = out.alloc_node(RopeNode::Concat {
+            l,
+            r,
+            len,
+            cache: RefCell::new(None),
+        });
         out
     }
 
@@ -166,7 +180,7 @@ impl Rope {
         fn rec(arena: &[RopeNode], idx: u32, out: &mut Vec<u16>) {
             match &arena[idx as usize] {
                 RopeNode::Leaf(s) => out.extend_from_slice(s),
-                RopeNode::Concat { l, r } => {
+                RopeNode::Concat { l, r, .. } => {
                     rec(arena, *l, out);
                     rec(arena, *r, out);
                 }
@@ -189,9 +203,36 @@ impl Rope {
 
     /// Append many ropes into `out`. Ropes produced by one expand() call
     /// share a single arena — it is borrowed exactly once, and traversal
-    /// is iterative over a reusable index stack (recursive traversal of
-    /// ~40k rope nodes per expansion measurably dominated the pack cost).
+    /// is iterative over a reusable index stack. Concat subtrees of
+    /// >= 16 units are materialised into a per-node cache on first write
+    /// (shared prefixes of multi-group expansions are otherwise
+    /// re-traversed once per suffix combination); root nodes are never
+    /// cached (each is written exactly once).
     pub fn write_many(ropes: &[Rope], out: &mut Vec<u16>) {
+        /// Minimum subtree size worth caching (units).
+        const CACHE_MIN: usize = 16;
+        fn write_node(arena: &[RopeNode], idx: u32, out: &mut Vec<u16>, is_root: bool) {
+            match &arena[idx as usize] {
+                RopeNode::Leaf(s) => out.extend_from_slice(s),
+                RopeNode::Concat { l, r, len, cache } => {
+                    if !is_root && *len >= CACHE_MIN {
+                        if let Some(c) = cache.borrow().as_ref() {
+                            out.extend_from_slice(c);
+                            return;
+                        }
+                        let mut tmp: Vec<u16> = Vec::with_capacity(*len);
+                        write_node(arena, *l, &mut tmp, false);
+                        write_node(arena, *r, &mut tmp, false);
+                        let seg: Seg = Rc::from(tmp);
+                        out.extend_from_slice(&seg);
+                        *cache.borrow_mut() = Some(seg);
+                    } else {
+                        write_node(arena, *l, out, false);
+                        write_node(arena, *r, out, false);
+                    }
+                }
+            }
+        }
         let shared = ropes.first().and_then(|r| r.arena.clone());
         let all_shared = match &shared {
             Some(a) => ropes
@@ -201,20 +242,9 @@ impl Rope {
         };
         if let (Some(a), true) = (shared, all_shared) {
             let arena = a.borrow();
-            let mut stack: Vec<u32> = Vec::with_capacity(64);
             for r in ropes {
-                if r.idx == 0 {
-                    continue;
-                }
-                stack.push(r.idx);
-                while let Some(idx) = stack.pop() {
-                    match &arena[idx as usize] {
-                        RopeNode::Leaf(s) => out.extend_from_slice(s),
-                        RopeNode::Concat { l, r } => {
-                            stack.push(*r);
-                            stack.push(*l);
-                        }
-                    }
+                if r.idx != 0 {
+                    write_node(&arena, r.idx, out, true);
                 }
             }
         } else {
@@ -252,7 +282,12 @@ fn concat_in(arena: &mut Vec<RopeNode>, l: W, r: W) -> W {
         return l;
     }
     let len = l.len + r.len;
-    arena.push(RopeNode::Concat { l: l.idx, r: r.idx });
+    arena.push(RopeNode::Concat {
+        l: l.idx,
+        r: r.idx,
+        len,
+        cache: RefCell::new(None),
+    });
     W {
         idx: (arena.len() - 1) as u32,
         len,
@@ -579,7 +614,7 @@ mod tests {
         fn rec(arena: &[RopeNode], idx: u32, out: &mut Vec<u16>) {
             match &arena[idx as usize] {
                 RopeNode::Leaf(seg) => out.extend_from_slice(seg),
-                RopeNode::Concat { l, r } => {
+                RopeNode::Concat { l, r, .. } => {
                     rec(arena, *l, out);
                     rec(arena, *r, out);
                 }
