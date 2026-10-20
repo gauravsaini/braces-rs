@@ -21,8 +21,8 @@ representation artifacts.
 
 ## REAL divergence (fixed)
 
-| # | fixture | expected | got |
-|---|---------|----------|-----|
+| #    | fixture                                    | expected                                      | got                                                                              |
+| ---- | ------------------------------------------ | --------------------------------------------- | -------------------------------------------------------------------------------- |
 | 1299 | `expand("{01..20}", {transform:"double"})` | `TypeError: input.padStart is not a function` | same message **plus** suffix ` (transform returned a number for a padded range)` |
 
 Fix: `crates/braces-core/src/error.rs` — `BracesError::PadStartOnNumber`

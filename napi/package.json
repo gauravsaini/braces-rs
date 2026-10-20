@@ -1,54 +1,54 @@
 {
-    "bugs": {
-        "url": "https://github.com/gauravsaini/braces-rs/issues"
-    },
-    "description": "Fast Rust-powered drop-in replacement for micromatch/braces — brace expansion, 1.2–3.6x faster, byte-identical output",
-    "devDependencies": {
-        "@napi-rs/cli": "2.18.4"
-    },
-    "engines": {
-        "node": ">= 14"
-    },
-    "files": [
-        "index.js",
-        "binding.js",
-        "binding.d.ts",
-        "README.md",
-        "LICENSE",
-        "*.node"
-    ],
-    "homepage": "https://github.com/gauravsaini/braces-rs#readme",
-    "keywords": [
-        "braces",
-        "brace-expansion",
-        "micromatch",
-        "glob",
-        "napi",
-        "rust"
-    ],
-    "license": "MIT",
-    "main": "index.js",
+  "bugs": {
+    "url": "https://github.com/gauravsaini/braces-rs/issues"
+  },
+  "description": "Fast Rust-powered drop-in replacement for micromatch/braces — brace expansion, 1.2–3.6x faster, byte-identical output",
+  "devDependencies": {
+    "@napi-rs/cli": "2.18.4"
+  },
+  "engines": {
+    "node": ">= 14"
+  },
+  "files": [
+    "index.js",
+    "binding.js",
+    "binding.d.ts",
+    "README.md",
+    "LICENSE",
+    "*.node"
+  ],
+  "homepage": "https://github.com/gauravsaini/braces-rs#readme",
+  "keywords": [
+    "braces",
+    "brace-expansion",
+    "micromatch",
+    "glob",
+    "napi",
+    "rust"
+  ],
+  "license": "MIT",
+  "main": "index.js",
+  "name": "braces-rs",
+  "napi": {
     "name": "braces-rs",
-    "napi": {
-        "name": "braces-rs",
-        "triples": {
-            "additional": [
-                "aarch64-apple-darwin",
-                "aarch64-unknown-linux-gnu",
-                "aarch64-unknown-linux-musl"
-            ],
-            "defaults": true
-        }
-    },
-    "repository": {
-        "type": "git",
-        "url": "git+https://github.com/gauravsaini/braces-rs.git"
-    },
-    "scripts": {
-        "build": "node node_modules/@napi-rs/cli/scripts/index.js build --platform --release --js binding.js --dts binding.d.ts --cargo-cwd ../crates/braces-napi",
-        "build:debug": "node node_modules/@napi-rs/cli/scripts/index.js build --platform --js binding.js --dts binding.d.ts --cargo-cwd ../crates/braces-napi",
-        "test": "node test-multigroup.js"
-    },
-    "types": "binding.d.ts",
-    "version": "0.1.0"
+    "triples": {
+      "additional": [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl"
+      ],
+      "defaults": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gauravsaini/braces-rs.git"
+  },
+  "scripts": {
+    "build": "node node_modules/@napi-rs/cli/scripts/index.js build --platform --release --js binding.js --dts binding.d.ts --cargo-cwd ../crates/braces-napi",
+    "build:debug": "node node_modules/@napi-rs/cli/scripts/index.js build --platform --js binding.js --dts binding.d.ts --cargo-cwd ../crates/braces-napi",
+    "test": "node test-multigroup.js"
+  },
+  "types": "binding.d.ts",
+  "version": "0.1.0"
 }

@@ -26,18 +26,20 @@ const native = require('./binding.js');
  * RangeError for rangeLimit, SyntaxError for maxLength, TypeError elsewhere).
  */
 const TYPED = { RangeError, SyntaxError, TypeError };
-const rethrow = fn => (...args) => {
-  try {
-    return fn(...args);
-  } catch (e) {
-    const m = /^(RangeError|SyntaxError|TypeError): ([\s\S]*)$/.exec(e && e.message);
-    if (m && TYPED[m[1]]) throw new TYPED[m[1]](m[2]);
-    throw e;
-  }
-};
+const rethrow =
+  (fn) =>
+  (...args) => {
+    try {
+      return fn(...args);
+    } catch (e) {
+      const m = /^(RangeError|SyntaxError|TypeError): ([\s\S]*)$/.exec(e && e.message);
+      if (m && TYPED[m[1]]) throw new TYPED[m[1]](m[2]);
+      throw e;
+    }
+  };
 
 /** Empty/absent options cross as `undefined` — zero per-field N-API reads. */
-const nopts = o => (o && Object.keys(o).length > 0 ? o : undefined);
+const nopts = (o) => (o && Object.keys(o).length > 0 ? o : undefined);
 
 /** Unpack `{ offsets, data }` (end-offsets into one joined string). */
 function unpackStrings(p) {
@@ -73,7 +75,8 @@ function unpackPacked(s) {
 function unpackBatch(p) {
   const { offsets, rowEnds, data } = p;
   const rows = new Array(rowEnds.length);
-  let si = 0, s = 0;
+  let si = 0,
+    s = 0;
   for (let r = 0; r < rowEnds.length; r++) {
     const end = rowEnds[r];
     const row = new Array(end - si);
@@ -98,7 +101,7 @@ const bracesFnNative = rethrow(native.bracesFn);
 const parseNative = rethrow(native.parse);
 const stringifyNative = rethrow(native.stringify);
 
-const isAstLike = v => v !== null && typeof v === 'object' && 'type' in v;
+const isAstLike = (v) => v !== null && typeof v === 'object' && 'type' in v;
 
 /**
  * Expand the given pattern(s) or compile them to a regex-compatible
@@ -141,7 +144,9 @@ braces.stringify = (input, options) => {
     return stringifyNative(input, o);
   }
   if (input === null || input === undefined) {
-    throw new TypeError(`Cannot read properties of ${input === null ? 'null' : 'undefined'} (reading 'value')`);
+    throw new TypeError(
+      `Cannot read properties of ${input === null ? 'null' : 'undefined'} (reading 'value')`,
+    );
   }
   return '';
 };
@@ -158,7 +163,9 @@ braces.compile = (input, options) => {
     return compileNative(input, o);
   }
   if (input === null || input === undefined) {
-    throw new TypeError(`Cannot read properties of ${input === null ? 'null' : 'undefined'} (reading 'invalid')`);
+    throw new TypeError(
+      `Cannot read properties of ${input === null ? 'null' : 'undefined'} (reading 'invalid')`,
+    );
   }
   if (isAstLike(input)) {
     return compileAstNative(input, o);
@@ -179,7 +186,9 @@ braces.expand = (input, options) => {
     return unpackPacked(expandNative(input, o));
   }
   if (input === null || input === undefined) {
-    throw new TypeError(`Cannot set properties of ${input === null ? 'null' : 'undefined'} (setting 'queue')`);
+    throw new TypeError(
+      `Cannot set properties of ${input === null ? 'null' : 'undefined'} (setting 'queue')`,
+    );
   }
   const t = typeof input;
   if (t === 'number' || t === 'boolean' || t === 'bigint') {
@@ -205,7 +214,9 @@ braces.create = (input, options) => {
     return typeof r === 'string' ? r : unpackStrings(r);
   }
   if (input === null || input === undefined) {
-    throw new TypeError(`Cannot read properties of ${input === null ? 'null' : 'undefined'} (reading 'length')`);
+    throw new TypeError(
+      `Cannot read properties of ${input === null ? 'null' : 'undefined'} (reading 'length')`,
+    );
   }
   if (options && options.expand === true) {
     return braces.expand(input, o);

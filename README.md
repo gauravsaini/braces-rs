@@ -20,13 +20,13 @@ Drop-in — identical to the original:
 ```js
 const braces = require('braces-rs');
 
-braces.expand('a/{b,c}');            // ['a/b', 'a/c']
-braces.compile('{a,b,c}');           // '(a|b|c)'
-braces.create('{1..3}');             // '(1|2|3)'
+braces.expand('a/{b,c}'); // ['a/b', 'a/c']
+braces.compile('{a,b,c}'); // '(a|b|c)'
+braces.create('{1..3}'); // '(1|2|3)'
 braces.create('{1..3}', { expand: true }); // ['1', '2', '3']
-braces('a/{b,c}');                   // ['a/b', 'a/c']
-braces.parse('{a,b}');               // AST node tree
-braces.stringify('{a,b}');           // '{a,b}'
+braces('a/{b,c}'); // ['a/b', 'a/c']
+braces.parse('{a,b}'); // AST node tree
+braces.stringify('{a,b}'); // '{a,b}'
 
 // Extra: batch expansion in one FFI call (amortises the crossing on tiny patterns)
 braces.expandMany(['{a,b}', '{1..3}']); // [['a', 'b'], ['1', '2', '3']]
@@ -34,15 +34,15 @@ braces.expandMany(['{a,b}', '{1..3}']); // [['a', 'b'], ['1', '2', '3']]
 
 ## API
 
-| fn | input | output |
-|----|-------|--------|
-| `braces(input, options?)` | string \| string[] | string[] |
-| `braces.expand(input, options?)` | string \| AST | string[] |
-| `braces.compile(input, options?)` | string \| AST | string (regex-compatible) |
-| `braces.create(input, options?)` | string | string \| string[] (with `expand: true`) |
-| `braces.parse(input, options?)` | string | AST node |
-| `braces.stringify(input, options?)` | string \| AST | string |
-| `braces.expandMany(patterns, options?)` | string[] | string[][] (Rust only) |
+| fn                                      | input              | output                                   |
+| --------------------------------------- | ------------------ | ---------------------------------------- |
+| `braces(input, options?)`               | string \| string[] | string[]                                 |
+| `braces.expand(input, options?)`        | string \| AST      | string[]                                 |
+| `braces.compile(input, options?)`       | string \| AST      | string (regex-compatible)                |
+| `braces.create(input, options?)`        | string             | string \| string[] (with `expand: true`) |
+| `braces.parse(input, options?)`         | string             | AST node                                 |
+| `braces.stringify(input, options?)`     | string \| AST      | string                                   |
+| `braces.expandMany(patterns, options?)` | string[]           | string[][] (Rust only)                   |
 
 Errors mirror the reference, including typed classes: `RangeError` for
 `rangeLimit` overflows, `SyntaxError` for `maxLength` overflows,
@@ -89,19 +89,19 @@ ladder** — median ops/s over 5 runs, 3 s fixed-duration each,
 5000-iteration warmup, Node 20.19.4, `rustc 1.98.1`, i7-7700 (final run
 2026-10-20, post-fidelity + rope rework):
 
-| pattern | rust ops/s | js ops/s | speedup |
-|---------|-----------:|---------:|--------:|
-| literal (no braces) | 2,177,783 | 659,016 | 3.30x |
-| small list `{a,b,c}` | 611,184 | 278,932 | 2.19x |
-| padded range `{001..300}` | 73,739 | 44,397 | 1.66x |
-| stepped range `{0..100..10}` | 747,411 | 476,563 | 1.57x |
-| alpha range `{a..z}` | 807,306 | 420,033 | 1.92x |
-| nested `{a,{b..d},e}` | 429,643 | 239,939 | 1.79x |
-| big range `{1..1000}` | 23,357 | 16,214 | 1.44x |
-| compile `{001..300}` | 1,079,165 | 674,204 | 1.60x |
-| compile `{1..10..2}` | 1,040,522 | 628,512 | 1.66x |
-| default compile | 946,881 | 740,443 | 1.28x |
-| expandMany batch-100 | 2,068 | 1,443 | 1.43x |
+| pattern                      | rust ops/s | js ops/s | speedup |
+| ---------------------------- | ---------: | -------: | ------: |
+| literal (no braces)          |  2,177,783 |  659,016 |   3.30x |
+| small list `{a,b,c}`         |    611,184 |  278,932 |   2.19x |
+| padded range `{001..300}`    |     73,739 |   44,397 |   1.66x |
+| stepped range `{0..100..10}` |    747,411 |  476,563 |   1.57x |
+| alpha range `{a..z}`         |    807,306 |  420,033 |   1.92x |
+| nested `{a,{b..d},e}`        |    429,643 |  239,939 |   1.79x |
+| big range `{1..1000}`        |     23,357 |   16,214 |   1.44x |
+| compile `{001..300}`         |  1,079,165 |  674,204 |   1.60x |
+| compile `{1..10..2}`         |  1,040,522 |  628,512 |   1.66x |
+| default compile              |    946,881 |  740,443 |   1.28x |
+| expandMany batch-100         |      2,068 |    1,443 |   1.43x |
 
 The one extra pattern that does not beat the reference is the
 3030-output multi-group case (`user-{200..300}/project-{a,b,c}-{1..10}`,

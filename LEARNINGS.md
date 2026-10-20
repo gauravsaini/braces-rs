@@ -11,15 +11,15 @@ Resolved dependency versions come from ajv-napi's committed `Cargo.lock`
 
 **Stack versions (from ajv-napi `Cargo.lock`):**
 
-| Crate / tool | Cargo.toml asks | Lockfile resolved |
-|---|---|---|
-| `napi` (features `napi4`, `serde-json`) | `2.12` (`Cargo.toml:10`) | **2.16.17** |
-| `napi-derive` | `2.12` (`Cargo.toml:11`) | **2.16.13** |
-| `napi-build` (build-dep) | `2.0` (`Cargo.toml:32`) | **2.3.1** |
-| `@napi-rs/cli` (devDep) | `^2.18.0` (`package.json:50`) | — |
-| `serde_json` | `1.0` (`Cargo.toml:13`) | 1.x |
-| `simd-json` | `0.13` (`Cargo.toml:15`) | 0.13.11 |
-| `mimalloc-safe` | `0.1` (`Cargo.toml:19,23,27`) | 0.1.56 |
+| Crate / tool                            | Cargo.toml asks               | Lockfile resolved |
+| --------------------------------------- | ----------------------------- | ----------------- |
+| `napi` (features `napi4`, `serde-json`) | `2.12` (`Cargo.toml:10`)      | **2.16.17**       |
+| `napi-derive`                           | `2.12` (`Cargo.toml:11`)      | **2.16.13**       |
+| `napi-build` (build-dep)                | `2.0` (`Cargo.toml:32`)       | **2.3.1**         |
+| `@napi-rs/cli` (devDep)                 | `^2.18.0` (`package.json:50`) | —                 |
+| `serde_json`                            | `1.0` (`Cargo.toml:13`)       | 1.x               |
+| `simd-json`                             | `0.13` (`Cargo.toml:15`)      | 0.13.11           |
+| `mimalloc-safe`                         | `0.1` (`Cargo.toml:19,23,27`) | 0.1.56            |
 
 Use these exact napi-rs versions for braces-rs. They are known-good together;
 do not jump to napi v3 blind.
@@ -40,7 +40,7 @@ do not jump to napi v3 blind.
   version **losing** to pure JS on small payloads — Simple schema (39 bytes):
   ~2.40M ops/s vs Ajv's ~6.11M ops/s (**−61%**); Complex (489 bytes): **−9%** —
   and only winning once the payload reaches ~10KB (**+10–11%**)
-  (`README.md`, "Performance" table). Brace patterns are *tiny* (tens of
+  (`README.md`, "Performance" table). Brace patterns are _tiny_ (tens of
   bytes) — braces-rs lives exactly in the regime where ajv-napi lost.
   The win for braces must come from (a) a much cheaper per-call path than
   ajv-napi's serde conversion, and (b) batch amortisation.
@@ -61,7 +61,7 @@ do not jump to napi v3 blind.
   work on `pattern.as_bytes()` — never re-encode, never go through
   `serde_json::Value`.
 - **Why:** ajv-napi has two input paths and the measured difference between
-  them *is* the product: the `serde_json::Value` path (`validate`,
+  them _is_ the product: the `serde_json::Value` path (`validate`,
   `src/lib.rs:300`) pays a full deep JS→serde conversion per call, while the
   Buffer path skips V8 object materialisation entirely (architecture
   diagram, `README.md:18-46`).
@@ -162,9 +162,11 @@ do not jump to napi v3 blind.
   #[global_allocator]
   static ALLOC: mimalloc_safe::MiMalloc = mimalloc_safe::MiMalloc;
   ```
+
   (`src/lib.rs:14-17`), with `mimalloc-safe` features per target:
   `skip_collect_on_exit` everywhere; `+ local_dynamic_tls` on Linux x64 and
   ARM64; `+ no_opt_arch` on Linux ARM64 (`Cargo.toml:18-27`).
+
 - **Why:** Brace expansion is an allocation storm — one input pattern
   becomes tens to thousands of small `String`s. Allocator behaviour
   dominates this workload class; ajv-napi's README lists mimalloc as one of
@@ -185,7 +187,9 @@ do not jump to napi v3 blind.
   }
   // per call: buf.clear(); buf.extend_from_slice(&buffer);
   ```
+
   (`src/lib.rs:20-22`, used at `src/lib.rs:307-313` and `321-327`).
+
 - **Why:** Node calls a napi module from (potentially) several threads;
   a thread-local avoids both locks and repeated allocation. Capacity is
   retained across calls, so steady-state calls allocate ~nothing for
@@ -419,7 +423,7 @@ strip = true
 - **Applies in braces-rs:** Do the opposite: a pure `braces-core` library
   crate (no napi dependency) + a thin napi crate that only marshals.
   This is also the sense-engine pattern: the engine core was proven with
-  `cargo test` (9/9 green) and a node smoke test *before* any host
+  `cargo test` (9/9 green) and a node smoke test _before_ any host
   integration, and the same core targeted wasm32 (173KB build) — a
   platform-free core is what made both possible (`~/MEMORY.md`,
   sense-engine M1 record).
@@ -441,7 +445,7 @@ strip = true
   exceptions, both tiny). No regex crate, no parser framework.
 - **Avoid:** Pulling in a glob/matching crate "for the compile-to-regex
   part" without benchmarking it — braces' `compile` output is a regex
-  *string*; generating it is more string building, same hot-loop rules
+  _string_; generating it is more string building, same hot-loop rules
   as #9/#10.
 
 ---
@@ -462,7 +466,7 @@ strip = true
     state (`validate.errors`), and reshaping of native results into the
     original library's exact object format (`formatErrors`,
     `wrapper.js:154-211`). Entry: `module.exports = Ajv;
-    module.exports.default = Ajv` (`wrapper.js:213-214`).
+module.exports.default = Ajv` (`wrapper.js:213-214`).
   - `wrapper.mjs` — a 6-line ESM shim: `createRequire` + re-export
     (`wrapper.mjs:1-6`).
 - **Applies in braces-rs:** Identical skeleton. The public surface to
@@ -478,7 +482,7 @@ strip = true
   `addSchema` swallows all errors (`wrapper.js:86` — `catch (e) {}`) and
   `addFormat`/`addKeyword` catch-and-ignore "to maintain drop-in
   compatibility" (`wrapper.js:111-114,132-135`). It buys compatibility
-  by hiding bugs; for braces-rs, match the reference's *observable*
+  by hiding bugs; for braces-rs, match the reference's _observable_
   behaviour deliberately per-method instead of blanket-swallowing.
 
 ### 20. Per-platform binaries via the napi CLI flow — and don't skip Linux
@@ -523,6 +527,7 @@ codegen-units = 1
 opt-level = 3
 strip = true
 ```
+
 (lockfile will resolve napi to 2.16.x — commit the lockfile.)
 
 **build.rs (verbatim from ajv-napi `build.rs:1-5`):**
@@ -543,7 +548,7 @@ fn main() {
 
 ---
 
-*Sources: all citations are to files in `ajv-napi/` as extracted from the
+_Sources: all citations are to files in `ajv-napi/` as extracted from the
 box (`/mnt/sdb1/braces-rs/ajv-napi`) on 2026-10-20, except sense-engine
 items, which cite the sense-engine section of `~/MEMORY.md` (the project's
-code lives on the Mac and was out of scope for this lane).*
+code lives on the Mac and was out of scope for this lane)._

@@ -7,17 +7,17 @@ login + a per-platform build matrix).
 
 ## Package facts
 
-| field | value |
-|-------|-------|
-| name | `braces-rs` |
-| version | `0.1.0` |
-| package dir | `napi/` (in this repo) |
-| main | `index.js` (hand-written drop-in wrapper) |
-| types | `binding.d.ts` |
-| license | MIT © Gaurav Saini (`LICENSE` at repo root and in `napi/`) |
-| repository / homepage / bugs | https://github.com/gauravsaini/braces-rs |
-| engines | node >= 14 |
-| keywords | braces, brace-expansion, micromatch, glob, napi, rust |
+| field                        | value                                                      |
+| ---------------------------- | ---------------------------------------------------------- |
+| name                         | `braces-rs`                                                |
+| version                      | `0.1.0`                                                    |
+| package dir                  | `napi/` (in this repo)                                     |
+| main                         | `index.js` (hand-written drop-in wrapper)                  |
+| types                        | `binding.d.ts`                                             |
+| license                      | MIT © Gaurav Saini (`LICENSE` at repo root and in `napi/`) |
+| repository / homepage / bugs | https://github.com/gauravsaini/braces-rs                   |
+| engines                      | node >= 14                                                 |
+| keywords                     | braces, brace-expansion, micromatch, glob, napi, rust      |
 
 Install story for users (already in README):
 

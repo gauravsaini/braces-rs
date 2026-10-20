@@ -24,5 +24,5 @@ const AB2000 = Array(2000).fill('{a,b}');
 time('expandMany 2000 literals', () => native.expandMany(LIT2000, {}), 200);
 time('expandMany 2000 {a,b}', () => native.expandMany(AB2000, {}), 200);
 // big range: core + 1000 output strings
-time("expand {1..1000}", () => native.expand('{1..1000}', {}), 2000);
-time("compile {001..300}", () => native.compile('{001..300}', {}), 50000);
+time('expand {1..1000}', () => native.expand('{1..1000}', {}), 2000);
+time('compile {001..300}', () => native.compile('{001..300}', {}), 50000);

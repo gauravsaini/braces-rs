@@ -15,7 +15,8 @@ const assert = require('node:assert');
 const path = require('node:path');
 
 const ours = require('./index.js');
-const refPath = process.env.BRACES_REF ||
+const refPath =
+  process.env.BRACES_REF ||
   process.argv[2] ||
   path.join(__dirname, '..', '..', 'micromatch-braces');
 const ref = require(refPath);
@@ -51,7 +52,11 @@ for (const p of CASES) {
   assert.deepStrictEqual(ours(p), ref(p), `default compile mismatch for ${JSON.stringify(p)}`);
   checks++;
   // expand mode of the default fn
-  assert.deepStrictEqual(ours(p, { expand: true }), ref(p, { expand: true }), `default expand mismatch for ${JSON.stringify(p)}`);
+  assert.deepStrictEqual(
+    ours(p, { expand: true }),
+    ref(p, { expand: true }),
+    `default expand mismatch for ${JSON.stringify(p)}`,
+  );
   checks++;
 }
 
@@ -66,7 +71,11 @@ checks += 3;
 const batch = ours.expandMany(CASES);
 assert.strictEqual(batch.length, CASES.length);
 for (let i = 0; i < CASES.length; i++) {
-  assert.deepStrictEqual(batch[i], ref.expand(CASES[i]), `expandMany mismatch for ${JSON.stringify(CASES[i])}`);
+  assert.deepStrictEqual(
+    batch[i],
+    ref.expand(CASES[i]),
+    `expandMany mismatch for ${JSON.stringify(CASES[i])}`,
+  );
   checks++;
 }
 

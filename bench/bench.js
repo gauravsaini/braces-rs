@@ -52,14 +52,18 @@ const CASES = [
   { name: 'compile nested', fn: 'compile', pattern: 'a/{b,c}/d' },
   { name: 'default compile', fn: 'default', pattern: '{a,b,c}' },
   { name: 'default expand', fn: 'default', pattern: '{a,b,c}', options: { expand: true } },
-  { name: 'expandMany batch-100', fn: 'expandMany', patterns: Array.from({ length: 100 }, (_, i) => `file-{${i % 10},a,b}-{1..5}.txt`) },
+  {
+    name: 'expandMany batch-100',
+    fn: 'expandMany',
+    patterns: Array.from({ length: 100 }, (_, i) => `file-{${i % 10},a,b}-{1..5}.txt`),
+  },
 ];
 
 console.log('== equivalence gate ==');
 for (const c of CASES) {
   let jsOut, rsOut;
   if (c.fn === 'expandMany') {
-    jsOut = c.patterns.map(p => jsBraces.expand(p, c.options || {}));
+    jsOut = c.patterns.map((p) => jsBraces.expand(p, c.options || {}));
     rsOut = rsBraces.expandMany(c.patterns, c.options || {});
   } else if (c.fn === 'expand') {
     jsOut = jsBraces.expand(c.pattern, c.options || {});
@@ -84,16 +88,28 @@ function bench(label, jsFn, rsFn) {
     for (let i = 0; i < WARMUP; i++) jsFn();
     let end = process.hrtime.bigint() + BigInt(DURATION_MS) * 1000000n;
     let n = 0;
-    while (process.hrtime.bigint() < end) { jsFn(); n++; }
+    while (process.hrtime.bigint() < end) {
+      jsFn();
+      n++;
+    }
     jsTimes.push(n / (DURATION_MS / 1000));
 
     for (let i = 0; i < WARMUP; i++) rsFn();
     end = process.hrtime.bigint() + BigInt(DURATION_MS) * 1000000n;
     n = 0;
-    while (process.hrtime.bigint() < end) { rsFn(); n++; }
+    while (process.hrtime.bigint() < end) {
+      rsFn();
+      n++;
+    }
     rsTimes.push(n / (DURATION_MS / 1000));
   }
-  return { label, js: median(jsTimes), jsMin: Math.min(...jsTimes), rs: median(rsTimes), rsMin: Math.min(...rsTimes) };
+  return {
+    label,
+    js: median(jsTimes),
+    jsMin: Math.min(...jsTimes),
+    rs: median(rsTimes),
+    rsMin: Math.min(...rsTimes),
+  };
 }
 
 const results = [];
@@ -102,7 +118,9 @@ const mk = (c) => {
     const ps = c.patterns;
     return [
       c.name,
-      () => { for (const p of ps) jsBraces.expand(p); },
+      () => {
+        for (const p of ps) jsBraces.expand(p);
+      },
       () => rsBraces.expandMany(ps),
     ];
   }
@@ -114,7 +132,8 @@ const mk = (c) => {
     const p = c.pattern;
     return [c.name, () => jsBraces.compile(p), () => rsBraces.compile(p)];
   }
-  const p = c.pattern, o = c.options || {};
+  const p = c.pattern,
+    o = c.options || {};
   return [c.name, () => jsBraces(p, o), () => rsBraces(p, o)];
 };
 
@@ -133,12 +152,26 @@ for (const r of results) {
   const su = r.rs / r.js;
   const line = `${r.label} | ${Math.round(r.js)} | ${Math.round(r.rs)} | ${su.toFixed(2)}x`;
   console.log(line);
-  rows.push({ pattern: r.label, js: Math.round(r.js), rs: Math.round(r.rs), speedup: +su.toFixed(2), jsMin: Math.round(r.jsMin), rsMin: Math.round(r.rsMin) });
+  rows.push({
+    pattern: r.label,
+    js: Math.round(r.js),
+    rs: Math.round(r.rs),
+    speedup: +su.toFixed(2),
+    jsMin: Math.round(r.jsMin),
+    rsMin: Math.round(r.rsMin),
+  });
 }
-require('fs').writeFileSync(__dirname + '/results.json', JSON.stringify({
-  node: process.version,
-  machine: require('os').platform() + '/' + require('os').arch(),
-  cpus: require('os').cpus()[0].model,
-  results: rows,
-}, null, 2));
+require('fs').writeFileSync(
+  __dirname + '/results.json',
+  JSON.stringify(
+    {
+      node: process.version,
+      machine: require('os').platform() + '/' + require('os').arch(),
+      cpus: require('os').cpus()[0].model,
+      results: rows,
+    },
+    null,
+    2,
+  ),
+);
 console.log('\nwrote bench/results.json');

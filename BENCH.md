@@ -28,22 +28,22 @@ Final run: 2026-10-20 (box). Raw output: `bench/results.json` in the repo
 
 ## Results (median ops/s) — final run, 2026-10-20 (post-fidelity + rope rework)
 
-| pattern | js ops/s | rs ops/s | speedup |
-|---------|---------:|---------:|--------:|
-| literal (no braces) | 659,016 | 2,177,783 | **3.30x** |
-| small list `{a,b,c}` | 278,932 | 611,184 | **2.19x** |
-| padded range `{001..300}` | 44,397 | 73,739 | **1.66x** |
-| stepped range `{0..100..10}` | 476,563 | 747,411 | **1.57x** |
-| alpha range `{a..z}` | 420,033 | 807,306 | **1.92x** |
-| nested `{a,{b..d},e}` | 239,939 | 429,643 | **1.79x** |
-| big range `{1..1000}` | 16,214 | 23,357 | **1.44x** |
-| compile padded `{001..300}` | 674,204 | 1,079,165 | **1.60x** |
-| compile stepped `{1..10..2}` | 628,512 | 1,040,522 | **1.66x** |
-| compile nested `a/{b,c}/d` | 860,872 | 1,020,203 | **1.19x** |
-| default compile (`braces('{a,b,c}')`) | 740,443 | 946,881 | **1.28x** |
-| default expand (`braces('{a,b,c}', {expand:true})`) | 269,999 | 295,843 | **1.10x** |
-| expandMany batch-100 | 1,443 | 2,068 | **1.43x** |
-| multi-group (3030 outputs, extra) | 3,753 | 3,324 | 0.89x |
+| pattern                                             | js ops/s |  rs ops/s |   speedup |
+| --------------------------------------------------- | -------: | --------: | --------: |
+| literal (no braces)                                 |  659,016 | 2,177,783 | **3.30x** |
+| small list `{a,b,c}`                                |  278,932 |   611,184 | **2.19x** |
+| padded range `{001..300}`                           |   44,397 |    73,739 | **1.66x** |
+| stepped range `{0..100..10}`                        |  476,563 |   747,411 | **1.57x** |
+| alpha range `{a..z}`                                |  420,033 |   807,306 | **1.92x** |
+| nested `{a,{b..d},e}`                               |  239,939 |   429,643 | **1.79x** |
+| big range `{1..1000}`                               |   16,214 |    23,357 | **1.44x** |
+| compile padded `{001..300}`                         |  674,204 | 1,079,165 | **1.60x** |
+| compile stepped `{1..10..2}`                        |  628,512 | 1,040,522 | **1.66x** |
+| compile nested `a/{b,c}/d`                          |  860,872 | 1,020,203 | **1.19x** |
+| default compile (`braces('{a,b,c}')`)               |  740,443 |   946,881 | **1.28x** |
+| default expand (`braces('{a,b,c}', {expand:true})`) |  269,999 |   295,843 | **1.10x** |
+| expandMany batch-100                                |    1,443 |     2,068 | **1.43x** |
+| multi-group (3030 outputs, extra)                   |    3,753 |     3,324 |     0.89x |
 
 **Every pattern on the required ladder beats the JS reference.**
 Round-over-round regression check vs the previous table (rs ops/s):
@@ -65,8 +65,8 @@ losing pattern (2,352 rs ops/s). Three restructures landed:
 3. **Subtree materialisation cache** — shared prefix subtrees (the 303
    `user-NNN/project-X-` prefixes, each consumed 10x) are written once
    per expansion and replayed.
-Plus `expand_wire`: the plain-literal and range-fill fast paths pack
-their items directly into the wire buffer (no rope objects at all).
+   Plus `expand_wire`: the plain-literal and range-fill fast paths pack
+   their items directly into the wire buffer (no rope objects at all).
 
 Where the remaining 11% sits: V8's `expand` result is a tree of lazy
 cons-strings the benchmark never materialises; forcing JS to produce

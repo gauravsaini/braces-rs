@@ -16,12 +16,12 @@ const t10 = time('mkstrings(10)', () => native.mkstrings(10), 100000);
 console.log('per-string (1000 vs 100):', ((t1000 - t100) / 900).toFixed(1) + ' ns');
 console.log('per-string (100 vs 10):', ((t100 - t10) / 90).toFixed(1) + ' ns');
 // core+conversion for the big range with the simple-range fast path
-time("expand {1..1000}", () => native.expand('{1..1000}', {}), 2000);
-time("expand {001..300}", () => native.expand('{001..300}', {}), 5000);
-time("expand {0..100..10}", () => native.expand('{0..100..10}', {}), 50000);
-time("expand {a..z}", () => native.expand('{a..z}', {}), 50000);
-time("expand {a,b,c}", () => native.expand('{a,b,c}', {}), 100000);
-time("expand literal", () => native.expand('plain-literal-no-braces-here', {}), 200000);
+time('expand {1..1000}', () => native.expand('{1..1000}', {}), 2000);
+time('expand {001..300}', () => native.expand('{001..300}', {}), 5000);
+time('expand {0..100..10}', () => native.expand('{0..100..10}', {}), 50000);
+time('expand {a..z}', () => native.expand('{a..z}', {}), 50000);
+time('expand {a,b,c}', () => native.expand('{a,b,c}', {}), 100000);
+time('expand literal', () => native.expand('plain-literal-no-braces-here', {}), 200000);
 // appended: latin1 probe
 const t1000l1 = time('mkstringsL1(1000)', () => native.mkstringsL1(1000), 3000);
 const t100l1 = time('mkstringsL1(100)', () => native.mkstringsL1(100), 20000);

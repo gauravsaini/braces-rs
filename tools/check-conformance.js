@@ -67,7 +67,7 @@ function corpusArtifactReason(fx) {
     const enc = {
       null: 'null (non-string input)',
       undefined: 'undefined (non-string input)',
-      '123': '123 (number input)',
+      123: '123 (number input)',
       true: 'true (boolean input)',
       '[object Object]': '{} (object input)',
       x: "['x'] (array input)",
@@ -80,9 +80,12 @@ function corpusArtifactReason(fx) {
   }
   // array-input fixtures for the default fn
   if (fn === 'default') {
-    if (pattern === '{a,b},{1..3}') return 'generator recorded braces(["{a,b}", "{1..3}"]) — array input joined into the pattern field';
-    if (pattern === '{a,a},b{a,a}') return 'generator recorded braces(["{a,a}", "b{a,a}"]) — array input joined into the pattern field';
-    if (pattern === '' && JSON.stringify(fx.result) === '[]') return 'generator recorded braces([]) — empty-array input encoded as ""';
+    if (pattern === '{a,b},{1..3}')
+      return 'generator recorded braces(["{a,b}", "{1..3}"]) — array input joined into the pattern field';
+    if (pattern === '{a,a},b{a,a}')
+      return 'generator recorded braces(["{a,a}", "b{a,a}"]) — array input joined into the pattern field';
+    if (pattern === '' && JSON.stringify(fx.result) === '[]')
+      return 'generator recorded braces([]) — empty-array input encoded as ""';
   }
   // `.length` fixtures: the generator recorded `run().length`, not the result
   if (typeof fx.result === 'number') {
@@ -98,10 +101,17 @@ for (let i = 0; i < corpus.length; i++) {
   const fx = corpus[i];
   const fn = FNS[fx.fn];
   if (!fn) {
-    failures.push({ idx: i, fx, got: '(no mapping)', category: 'REAL', reason: `unknown fn ${fx.fn}` });
+    failures.push({
+      idx: i,
+      fx,
+      got: '(no mapping)',
+      category: 'REAL',
+      reason: `unknown fn ${fx.fn}`,
+    });
     continue;
   }
-  let got, err = null;
+  let got,
+    err = null;
   try {
     got = fn(fx.pattern, fx.options);
   } catch (e) {
@@ -130,18 +140,22 @@ for (let i = 0; i < corpus.length; i++) {
   }
 }
 
-const real = failures.filter(f => f.category === 'REAL');
-const artifacts = failures.filter(f => f.category === 'CORPUS-ARTIFACT');
+const real = failures.filter((f) => f.category === 'REAL');
+const artifacts = failures.filter((f) => f.category === 'CORPUS-ARTIFACT');
 
-console.log(`conformance (napi wrapper, exact): ${pass} pass / ${failures.length} fail / ${corpus.length} total`);
+console.log(
+  `conformance (napi wrapper, exact): ${pass} pass / ${failures.length} fail / ${corpus.length} total`,
+);
 console.log(`  REAL failures: ${real.length}`);
 console.log(`  corpus artifacts: ${artifacts.length}`);
-const show = f => {
+const show = (f) => {
   const p = String(f.fx.pattern);
   console.log(
-    `#${f.idx} [${f.category}] fn=${f.fx.fn} pattern=${JSON.stringify(p.length > 60 ? p.slice(0, 57) + '...' : p)} options=${JSON.stringify(f.fx.options)}`
+    `#${f.idx} [${f.category}] fn=${f.fx.fn} pattern=${JSON.stringify(p.length > 60 ? p.slice(0, 57) + '...' : p)} options=${JSON.stringify(f.fx.options)}`,
   );
-  console.log(`    expected: ${(f.fx.error !== undefined ? f.fx.error : JSON.stringify(f.fx.result) || '').slice(0, 160)}`);
+  console.log(
+    `    expected: ${(f.fx.error !== undefined ? f.fx.error : JSON.stringify(f.fx.result) || '').slice(0, 160)}`,
+  );
   console.log(`    got:      ${String(f.got).slice(0, 160)}`);
   console.log(`    reason:   ${f.reason}`);
 };
@@ -155,7 +169,10 @@ if (verbose) {
 }
 
 if (outJson) {
-  fs.writeFileSync(outJson, JSON.stringify({ pass, fail: failures.length, total: corpus.length, failures }, null, 1));
+  fs.writeFileSync(
+    outJson,
+    JSON.stringify({ pass, fail: failures.length, total: corpus.length, failures }, null, 1),
+  );
   console.log(`\nwrote ${outJson}`);
 }
 process.exit(real.length === 0 ? 0 : 1);

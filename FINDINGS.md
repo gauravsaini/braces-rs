@@ -7,16 +7,17 @@ Each record: {fn, pattern, options, result} or {fn, pattern, options, error:"Nam
 
 ## 1. API surface
 
-| Export | Signature | Returns |
-|---|---|---|
-| `braces` (default fn) | `(patterns: string \| string[], options?)` | **array of strings** — `create()` per pattern, flattened; if `expand&&nodupes` dedupes via Set |
-| `braces.expand` | `(input: string \| AST, options?)` | **array**; `noempty` → filter(Boolean); `nodupes` → Set dedupe |
-| `braces.compile` | `(input: string \| AST, options?)` | **string** (NOT array — JSDoc saying "array" is wrong): regex-source |
-| `braces.create` | `(input: string, options?)` | if `input==='' \|\| input.length<3` → `[input]`; else `expand` if `options.expand===true` else compile-string |
-| `braces.stringify` | `(input: string \| AST-node, options?)` | raw string reconstruction (used for invalid/dollar braces) |
-| `braces.parse` | `(input: string, options?)` | AST `{type:'root', input, nodes[]}`; throws TypeError('Expected a string') on non-string; SyntaxError(`Input length (N), exceeds max characters (M)`) when len > min(maxLength, 10000) |
+| Export                | Signature                                  | Returns                                                                                                                                                                                |
+| --------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `braces` (default fn) | `(patterns: string \| string[], options?)` | **array of strings** — `create()` per pattern, flattened; if `expand&&nodupes` dedupes via Set                                                                                         |
+| `braces.expand`       | `(input: string \| AST, options?)`         | **array**; `noempty` → filter(Boolean); `nodupes` → Set dedupe                                                                                                                         |
+| `braces.compile`      | `(input: string \| AST, options?)`         | **string** (NOT array — JSDoc saying "array" is wrong): regex-source                                                                                                                   |
+| `braces.create`       | `(input: string, options?)`                | if `input==='' \|\| input.length<3` → `[input]`; else `expand` if `options.expand===true` else compile-string                                                                          |
+| `braces.stringify`    | `(input: string \| AST-node, options?)`    | raw string reconstruction (used for invalid/dollar braces)                                                                                                                             |
+| `braces.parse`        | `(input: string, options?)`                | AST `{type:'root', input, nodes[]}`; throws TypeError('Expected a string') on non-string; SyntaxError(`Input length (N), exceeds max characters (M)`) when len > min(maxLength, 10000) |
 
 ### Options (defaults shown; `undefined` = off)
+
 - `maxLength` (10000, capped by MAX_LENGTH=10000) — parse only
 - `expand` (bool) — routes main/create to expand instead of compile
 - `nodupes` — dedupe expand results; also applies in main fn when expand:true

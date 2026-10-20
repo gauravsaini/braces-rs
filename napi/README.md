@@ -11,10 +11,10 @@ npm install braces-rs
 ```js
 const braces = require('braces-rs');
 
-braces.expand('a/{b,c}');                 // ['a/b', 'a/c']
-braces.compile('{a,b,c}');                // '(a|b|c)'
+braces.expand('a/{b,c}'); // ['a/b', 'a/c']
+braces.compile('{a,b,c}'); // '(a|b|c)'
 braces.create('{1..3}', { expand: true }); // ['1', '2', '3']
-braces('{a,b}/file-{1..3}.txt');          // ['(a|b)/file-(1|2|3).txt']
+braces('{a,b}/file-{1..3}.txt'); // ['(a|b)/file-(1|2|3).txt']
 ```
 
 Full documentation, benchmarks and correctness evidence:
