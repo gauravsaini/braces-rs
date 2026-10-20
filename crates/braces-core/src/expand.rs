@@ -64,8 +64,12 @@ fn new_arena() -> RopeArena {
 #[derive(Clone, Debug, Default)]
 pub struct Rope {
     arena: Option<RopeArena>,
-    idx: u32, // 0 = empty
+    idx: u32, // 0 = empty (tree ropes)
     len: usize,
+    /// Inline single-segment rope (no arena): the plain-literal and
+    /// other one-string results pay a single allocation, like a plain
+    /// `Vec<u16>` did before ropes.
+    leaf: Option<Seg>,
 }
 
 impl Rope {
@@ -74,6 +78,7 @@ impl Rope {
             arena: Some(Rc::clone(arena)),
             idx: 0,
             len: 0,
+            leaf: None,
         }
     }
 
@@ -82,6 +87,7 @@ impl Rope {
             arena: None,
             idx: 0,
             len: 0,
+            leaf: None,
         }
     }
 
@@ -97,7 +103,36 @@ impl Rope {
     }
 
     pub fn from_units(v: Vec<u16>) -> Self {
-        Self::from_units_in(&new_arena(), v)
+        if v.is_empty() {
+            return Rope::empty();
+        }
+        let len = v.len();
+        Rope {
+            arena: None,
+            idx: 0,
+            len,
+            leaf: Some(Rc::from(v)),
+        }
+    }
+
+    /// Build many ropes in ONE shared arena (fill results): the pack
+    /// path's single-borrow traversal applies, and per-item cost is one
+    /// arena push instead of a fresh arena per item.
+    pub fn many_from_units(items: Vec<Vec<u16>>) -> Vec<Rope> {
+        let arena = new_arena();
+        items
+            .into_iter()
+            .map(|v| Rope::from_units_in(&arena, v))
+            .collect()
+    }
+
+    /// This rope as a tree rope in `arena` (inline leaves and foreign
+    /// ropes are materialised into it — rare, test-only by construction).
+    fn as_tree(&self, arena: &RopeArena) -> Rope {
+        match &self.arena {
+            Some(a) if Rc::ptr_eq(a, arena) && self.leaf.is_none() => self.clone(),
+            _ => Rope::from_units_in(arena, self.to_units()),
+        }
     }
 
     fn from_units_in(arena: &RopeArena, v: Vec<u16>) -> Self {
@@ -133,11 +168,20 @@ impl Rope {
 
     /// `self + other` as a new rope (one arena push, no byte copies).
     fn concat(&self, other: &Rope) -> Rope {
-        if self.idx == 0 {
+        if self.len == 0 {
             return other.clone();
         }
-        if other.idx == 0 {
+        if other.len == 0 {
             return self.clone();
+        }
+        if self.leaf.is_some() || other.leaf.is_some() {
+            let arena = self
+                .arena
+                .clone()
+                .or_else(|| other.arena.clone())
+                .unwrap_or_else(new_arena);
+            let l = self.as_tree(&arena);
+            return l.concat(&other.as_tree(&arena));
         }
         let l = self.idx;
         let r = self.other_idx(other);
@@ -146,6 +190,7 @@ impl Rope {
             arena: Some(self.arena()),
             idx: 0,
             len,
+            leaf: None,
         };
         out.idx = out.alloc_node(RopeNode::Concat {
             l,
@@ -177,6 +222,10 @@ impl Rope {
     /// pattern's segment count (concat chains lean right by construction
     /// and realistic patterns stay well under a hundred deep).
     pub fn write_into(&self, out: &mut Vec<u16>) {
+        if let Some(seg) = &self.leaf {
+            out.extend_from_slice(seg);
+            return;
+        }
         fn rec(arena: &[RopeNode], idx: u32, out: &mut Vec<u16>) {
             match &arena[idx as usize] {
                 RopeNode::Leaf(s) => out.extend_from_slice(s),
@@ -547,6 +596,7 @@ pub fn expand(ast: &mut Ast, opts: &Options) -> Result<Vec<Rope>, BracesError> {
             arena: Some(Rc::clone(&shared)),
             idx: w.idx,
             len: w.len,
+            leaf: None,
         })
         .collect())
 }

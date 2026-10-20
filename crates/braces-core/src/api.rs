@@ -203,10 +203,9 @@ pub fn expand_str_ropes(input: &str, opts: &Options) -> Result<Vec<Rope>, Braces
         }
         let fopts = crate::fill::FillOptions::from_options(opts, false);
         return match crate::fill::fill(&s, Some(&e), st.as_deref(), &fopts)? {
-            crate::fill::FillOut::List(items) if !items.is_empty() => Ok(apply_post_ropes(
-                items.into_iter().map(Rope::from_units).collect(),
-                opts,
-            )),
+            crate::fill::FillOut::List(items) if !items.is_empty() => {
+                Ok(apply_post_ropes(Rope::many_from_units(items), opts))
+            }
             // Reference fallback: an empty fill stringifies the brace
             // verbatim (simple-range chars need no re-escaping).
             crate::fill::FillOut::List(_) => {
