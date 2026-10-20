@@ -5,3 +5,4 @@ node_modules/
 napi/generated/
 bench/*.out
 Cargo.lock.bak
+.pnpm-store/

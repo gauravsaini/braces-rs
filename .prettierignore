@@ -1,0 +1,5 @@
+# Ignore build artifacts and generated files
+target/
+*.node
+pnpm-lock.yaml
+Cargo.lock
