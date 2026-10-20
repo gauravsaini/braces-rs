@@ -355,10 +355,19 @@ pub fn braces_units(input: &Input, opts: &Options) -> Result<Vec<Vec<u16>>, Brac
                 }
             }
         }
-        Input::Str(s) => match create_units(&Value::Str(s.clone()), opts)? {
-            CreateUnits::Expanded(v) => output.extend(v),
-            CreateUnits::Compiled(u) => output.push(u),
-        },
+        Input::Str(s) => {
+            // create_units() would route expand:true straight to
+            // expand_units (past its `< 3` short-circuit) — skip the clone
+            // and the duplicate scans on this hot path.
+            if opts.expand && !s.is_empty() && s.encode_utf16().count() >= 3 {
+                output = expand_units(s, opts)?;
+            } else {
+                match create_units(&Value::Str(s.clone()), opts)? {
+                    CreateUnits::Expanded(v) => output.extend(v),
+                    CreateUnits::Compiled(u) => output.push(u),
+                }
+            }
+        }
     }
     if opts.expand && opts.nodupes {
         let mut seen = HashSet::with_capacity(output.len());

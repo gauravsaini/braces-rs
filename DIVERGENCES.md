@@ -49,7 +49,17 @@ thrown error. braces-rs throws real typed JS errors too (RangeError /
 SyntaxError / TypeError, reconstructed in the wrapper), so `instanceof`
 and `.name` behave identically.
 
-## 4. What is NOT diverged
+## 4. Bulk-result transport (internal, not observable)
+
+Multi-string results (`expand`, `braces()`, `expandAst`, `expandMany`)
+cross the napi boundary packed into a single string —
+`[count: u32 as 2 chars][end-offsets: count × u32 as 2 chars][data]` —
+which the wrapper unpacks with `String.prototype.substring`. This is a
+pure transport optimisation (per-string N-API creation costs ~134ns,
+more than the reference's per-element budget): the public API returns
+plain `string[]` / `string[][]` exactly as the reference does.
+
+## 5. What is NOT diverged
 
 - All 2008 corpus fixtures: outputs are byte-identical, including error
   class + message for RangeError (rangeLimit), SyntaxError (maxLength),
