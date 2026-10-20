@@ -378,7 +378,7 @@ fn conformance() {
                     }
                     _ => {
                         let r = parsed
-                            .map(|ast| api::stringify_ast(&ast, &opts))
+                            .and_then(|ast| api::stringify_ast(&ast, &opts))
                             .map(|out| check_val(&mut rep, idx, rec, Json::String(out)));
                         if has_error {
                             check_err(&mut rep, idx, rec, r.map(|_| ()));

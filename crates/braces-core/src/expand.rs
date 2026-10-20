@@ -577,6 +577,7 @@ impl<'a> Expander<'a> {
 /// callers join them (`Rope::to_units` / `write_into`) at the boundary
 /// where real strings are needed.
 pub fn expand(ast: &mut Ast, opts: &Options) -> Result<Vec<Rope>, BracesError> {
+    crate::ast::check_depth(&ast.nodes, ast.root)?;
     let n = ast.nodes.len();
     let mut expander = Expander {
         ast,

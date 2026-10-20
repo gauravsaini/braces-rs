@@ -363,6 +363,7 @@ pub fn compile_ast(ast: &mut Ast, opts: &Options) -> Result<String, BracesError>
 /// `braces.stringify(input, options)` — `input` is a pattern string or AST.
 pub fn stringify_str(input: &str, opts: &Options) -> Result<String, BracesError> {
     let ast = parse_str(input, opts)?;
+    crate::ast::check_depth(&ast.nodes, ast.root)?;
     Ok(from_units(&stringify_nodes(
         &ast.nodes,
         ast.root,
@@ -370,12 +371,13 @@ pub fn stringify_str(input: &str, opts: &Options) -> Result<String, BracesError>
     )))
 }
 
-pub fn stringify_ast(ast: &Ast, opts: &Options) -> String {
-    from_units(&stringify_nodes(
+pub fn stringify_ast(ast: &Ast, opts: &Options) -> Result<String, BracesError> {
+    crate::ast::check_depth(&ast.nodes, ast.root)?;
+    Ok(from_units(&stringify_nodes(
         &ast.nodes,
         ast.root,
         opts.escape_invalid,
-    ))
+    )))
 }
 
 /// `create()` result in UTF-16 units (napi path).

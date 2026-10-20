@@ -128,3 +128,40 @@ impl Ast {
         &mut self.nodes[id]
     }
 }
+
+/// Maximum AST nesting depth the recursive walkers (expand / compile /
+/// stringify) will traverse — CVE-2026-93687 hardening.
+///
+/// Justification: the JS reference dies with `RangeError: Maximum call
+/// stack size exceeded` at a brace-chain depth of ~4,999 on a stock V8
+/// (empirically verified), and the (reference-faithful) 10,000-char
+/// input cap means no string input can express a depth above ~5,000
+/// anyway — so a 10,000 limit can never reject an input the reference
+/// handles. It exists so the walkers stay safe if the length cap is
+/// ever raised or an AST is built programmatically.
+pub const MAX_AST_DEPTH: usize = 10_000;
+
+/// Iterative (explicit-stack) depth of the tree rooted at `root`;
+/// the root itself counts as depth 1.
+pub fn tree_depth(nodes: &[Node], root: NodeId) -> usize {
+    let mut max = 0usize;
+    let mut stack: Vec<(NodeId, usize)> = vec![(root, 1)];
+    while let Some((id, d)) = stack.pop() {
+        if d > max {
+            max = d;
+        }
+        for &c in &nodes[id].children {
+            stack.push((c, d + 1));
+        }
+    }
+    max
+}
+
+/// The CVE-2026-93687 guard: typed `RangeError` instead of a native
+/// stack overflow when an AST is too deep for the recursive walkers.
+pub fn check_depth(nodes: &[Node], root: NodeId) -> Result<(), crate::error::BracesError> {
+    if tree_depth(nodes, root) > MAX_AST_DEPTH {
+        return Err(crate::error::BracesError::DepthLimit);
+    }
+    Ok(())
+}

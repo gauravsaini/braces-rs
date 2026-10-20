@@ -26,6 +26,13 @@ pub enum BracesError {
     /// (zero-prefixed) numeric range. Message is byte-identical to the
     /// reference (verified by the exact napi conformance checker).
     PadStartOnNumber,
+    /// RangeError: Maximum call stack size exceeded — CVE-2026-93687
+    /// hardening: the recursive walkers refuse ASTs deeper than
+    /// `ast::MAX_AST_DEPTH` instead of risking a native stack overflow
+    /// (an uncatchable SIGSEGV in-process). Message matches the V8
+    /// stack-overflow RangeError the JS reference dies with on deeply
+    /// nested patterns.
+    DepthLimit,
     /// Non-string input reached a code path that dereferences it like an
     /// AST node (expand/compile/create on null/undefined/number/bool/
     /// object/array). The JS reference throws V8-worded TypeErrors here;
@@ -37,7 +44,7 @@ impl BracesError {
     /// The JS error class name (`TypeError`, `RangeError`, `SyntaxError`).
     pub fn name(&self) -> &'static str {
         match self {
-            BracesError::RangeLimit => "RangeError",
+            BracesError::RangeLimit | BracesError::DepthLimit => "RangeError",
             BracesError::MaxLength { .. } => "SyntaxError",
             BracesError::ExpectedString
             | BracesError::PadStartOnNumber
@@ -55,6 +62,7 @@ impl BracesError {
             BracesError::MaxLength { len, max } => {
                 format!("Input length ({len}), exceeds max characters ({max})")
             }
+            BracesError::DepthLimit => "Maximum call stack size exceeded".to_string(),
             BracesError::ExpectedString => "Expected a string".to_string(),
             BracesError::PadStartOnNumber => "input.padStart is not a function".to_string(),
             BracesError::NonStringInput(what) => {

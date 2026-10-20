@@ -109,6 +109,7 @@ fn walk(ast: &mut Ast, node: NodeId, parent: Option<NodeId>, opts: &Options, out
 
 /// Compile an AST into a regex-source string.
 pub fn compile(ast: &mut Ast, opts: &Options) -> Result<Vec<u16>, BracesError> {
+    crate::ast::check_depth(&ast.nodes, ast.root)?;
     let root = ast.root;
     let mut out = Vec::with_capacity(ast.input.len() * 2);
     walk(ast, root, None, opts, &mut out)?;

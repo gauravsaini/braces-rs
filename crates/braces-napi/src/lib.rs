@@ -349,7 +349,14 @@ fn ast_from_object(obj: &JsObject) -> Result<Ast> {
         ast: &mut Ast,
         parent: Option<usize>,
         prev: Option<usize>,
+        depth: usize,
     ) -> Result<usize> {
+        // CVE-2026-93687: the converter itself recurses, so bound it the
+        // same way the core walkers are — a typed RangeError, never a
+        // native stack overflow.
+        if depth > braces_core::ast::MAX_AST_DEPTH {
+            return Err(err(BracesError::DepthLimit));
+        }
         let ty_s: String = obj.get_named_property("type")?;
         let ty = match ty_s.as_str() {
             "root" => NodeType::Root,
@@ -390,7 +397,7 @@ fn ast_from_object(obj: &JsObject) -> Result<Ast> {
             let mut prev_child = None;
             for i in 0..len {
                 let child_obj: JsObject = kids.get_element(i)?;
-                let cid = build(&child_obj, ast, Some(id), prev_child)?;
+                let cid = build(&child_obj, ast, Some(id), prev_child, depth + 1)?;
                 ast.node_mut(id).children.push(cid);
                 prev_child = Some(cid);
             }
@@ -403,7 +410,7 @@ fn ast_from_object(obj: &JsObject) -> Result<Ast> {
         root: 0,
         input: Vec::new(),
     };
-    let root = build(obj, &mut ast, None, None)?;
+    let root = build(obj, &mut ast, None, None, 0)?;
     ast.root = root;
     Ok(ast)
 }
@@ -494,7 +501,7 @@ pub fn stringify(
         Either::A(s) => api::stringify_str(&s, &opts).map_err(err),
         Either::B(obj) => {
             let ast = ast_from_object(&obj)?;
-            Ok(api::stringify_ast(&ast, &opts))
+            api::stringify_ast(&ast, &opts).map_err(err)
         }
     };
     clear_transform();
