@@ -240,6 +240,28 @@ pub fn num_to_string(v: f64) -> Vec<u16> {
     }
     let neg = v < 0.0;
     let a = v.abs();
+    if a.fract() == 0.0 && a <= 9007199254740991.0 {
+        // Fast path (hot in range fills): exact integers render as plain
+        // decimal — write the digits directly instead of f64 formatting.
+        let mut n = a as u64;
+        let mut buf = [0u16; 16];
+        let mut i = buf.len();
+        if n == 0 {
+            i -= 1;
+            buf[i] = b'0' as u16;
+        }
+        while n > 0 {
+            i -= 1;
+            buf[i] = b'0' as u16 + (n % 10) as u16;
+            n /= 10;
+        }
+        let mut out = Vec::with_capacity(buf.len() - i + (neg as usize));
+        if neg {
+            out.push(b'-' as u16);
+        }
+        out.extend_from_slice(&buf[i..]);
+        return out;
+    }
     let mut out = String::new();
     if neg {
         out.push('-');

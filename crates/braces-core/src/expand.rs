@@ -165,8 +165,20 @@ impl<'a> Expander<'a> {
                 )),
             };
             let popped = self.queues[qid].pop();
-            let r = append(popped, stash, false);
-            self.queues[qid].push(QueueVal::Many(r));
+            match (popped, stash) {
+                (None, QueueVal::Many(v)) => {
+                    // append([], stash) with enclose=false is the identity
+                    // on stash's flattened contents.
+                    self.queues[qid].push(QueueVal::Many(v));
+                }
+                (None, one) => {
+                    self.queues[qid].push(QueueVal::Many(vec![one]));
+                }
+                (Some(p), stash) => {
+                    let r = append(Some(p), stash, false);
+                    self.queues[qid].push(QueueVal::Many(r));
+                }
+            }
             self.ast.node_mut(node).children.clear();
             return Ok(());
         }

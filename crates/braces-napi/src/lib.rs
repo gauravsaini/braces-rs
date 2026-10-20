@@ -177,10 +177,52 @@ fn clear_transform() {
     TRANSFORM_FN.with(|c| *c.borrow_mut() = None);
 }
 
+/// A JS string created directly from the core's UTF-16 units — skips the
+/// UTF-8 intermediate that `String` conversion would incur per element.
+pub struct U16String(pub Vec<u16>);
+
+impl ToNapiValue for U16String {
+    unsafe fn to_napi_value(
+        env: napi::sys::napi_env,
+        val: Self,
+    ) -> Result<napi::sys::napi_value> {
+        let mut ptr = std::ptr::null_mut();
+        check_status!(
+            napi::sys::napi_create_string_utf16(env, val.0.as_ptr(), val.0.len(), &mut ptr),
+            "Failed to convert UTF-16 units into a JS string"
+        )?;
+        Ok(ptr)
+    }
+}
+
+/// Options conversion with a fast path: the overwhelmingly common `{}`
+/// (or missing options) resolves to defaults after a single
+/// `get_property_names` call instead of ~16 per-field N-API reads from the
+/// derived object conversion.
+fn opts_arg(obj: Option<JsObject>, env: Env) -> Result<Options> {
+    let Some(obj) = obj else {
+        return Ok(Options::default());
+    };
+    if let Ok(keys) = obj.get_property_names() {
+        if keys.get_array_length().map(|n| n == 0).unwrap_or(false) {
+            return Ok(Options::default());
+        }
+    }
+    let raw = unsafe { obj.raw() };
+    let bo = unsafe { BracesOptions::from_napi_value(env.raw(), raw) }?;
+    Ok(to_core_options(Some(bo), env))
+}
+
 #[napi]
-pub fn expand(pattern: String, options: Option<BracesOptions>, env: Env) -> Result<Vec<String>> {
-    let opts = to_core_options(options, env);
-    let r = api::expand_str(&pattern, &opts).map_err(err);
+pub fn expand(
+    pattern: String,
+    options: Option<JsObject>,
+    env: Env,
+) -> Result<Vec<U16String>> {
+    let opts = opts_arg(options, env)?;
+    let r = api::expand_units(&pattern, &opts)
+        .map(|v| v.into_iter().map(U16String).collect())
+        .map_err(err);
     clear_transform();
     r
 }
@@ -188,19 +230,31 @@ pub fn expand(pattern: String, options: Option<BracesOptions>, env: Env) -> Resu
 #[napi]
 pub fn expand_many(
     patterns: Vec<String>,
-    options: Option<BracesOptions>,
+    options: Option<JsObject>,
     env: Env,
-) -> Result<Vec<Vec<String>>> {
-    let opts = to_core_options(options, env);
-    let r = api::expand_many(&patterns, &opts).map_err(err);
+) -> Result<Vec<Vec<U16String>>> {
+    let opts = opts_arg(options, env)?;
+    let r = api::expand_many_units(&patterns, &opts)
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| row.into_iter().map(U16String).collect())
+                .collect()
+        })
+        .map_err(err);
     clear_transform();
     r
 }
 
 #[napi]
-pub fn compile(pattern: String, options: Option<BracesOptions>, env: Env) -> Result<String> {
-    let opts = to_core_options(options, env);
-    let r = api::compile_str(&pattern, &opts).map_err(err);
+pub fn compile(
+    pattern: String,
+    options: Option<JsObject>,
+    env: Env,
+) -> Result<U16String> {
+    let opts = opts_arg(options, env)?;
+    let r = api::compile_units(&pattern, &opts)
+        .map(U16String)
+        .map_err(err);
     clear_transform();
     r
 }
@@ -208,14 +262,16 @@ pub fn compile(pattern: String, options: Option<BracesOptions>, env: Env) -> Res
 #[napi]
 pub fn create(
     pattern: String,
-    options: Option<BracesOptions>,
+    options: Option<JsObject>,
     env: Env,
-) -> Result<Either<Vec<String>, String>> {
-    let opts = to_core_options(options, env);
-    let r = api::create(&CoreValue::Str(pattern), &opts)
+) -> Result<Either<Vec<U16String>, U16String>> {
+    let opts = opts_arg(options, env)?;
+    let r = api::create_units(&CoreValue::Str(pattern), &opts)
         .map(|c| match c {
-            CreateResult::Expanded(v) => Either::A(v),
-            CreateResult::Compiled(s) => Either::B(s),
+            api::CreateUnits::Expanded(v) => {
+                Either::A(v.into_iter().map(U16String).collect())
+            }
+            api::CreateUnits::Compiled(u) => Either::B(U16String(u)),
         })
         .map_err(err);
     clear_transform();
@@ -225,15 +281,17 @@ pub fn create(
 #[napi]
 pub fn braces_fn(
     input: Either<String, Vec<String>>,
-    options: Option<BracesOptions>,
+    options: Option<JsObject>,
     env: Env,
-) -> Result<Vec<String>> {
-    let opts = to_core_options(options, env);
+) -> Result<Vec<U16String>> {
+    let opts = opts_arg(options, env)?;
     let input = match input {
         Either::A(s) => api::Input::Str(s),
         Either::B(v) => api::Input::Arr(v),
     };
-    let r = api::braces(&input, &opts).map_err(err);
+    let r = api::braces_units(&input, &opts)
+        .map(|v| v.into_iter().map(U16String).collect())
+        .map_err(err);
     clear_transform();
     r
 }
@@ -349,27 +407,35 @@ fn ast_to_object(env: Env, ast: &Ast) -> Result<JsObject> {
 }
 
 #[napi]
-pub fn parse(pattern: String, options: Option<BracesOptions>, env: Env) -> Result<JsObject> {
-    let opts = to_core_options(options, env);
+pub fn parse(pattern: String, options: Option<JsObject>, env: Env) -> Result<JsObject> {
+    let opts = opts_arg(options, env)?;
     let ast = api::parse_str(&pattern, &opts).map_err(err)?;
     clear_transform();
     ast_to_object(env, &ast)
 }
 
 #[napi]
-pub fn expand_ast(ast_obj: JsObject, options: Option<BracesOptions>, env: Env) -> Result<Vec<String>> {
-    let opts = to_core_options(options, env);
+pub fn expand_ast(
+    ast_obj: JsObject,
+    options: Option<JsObject>,
+    env: Env,
+) -> Result<Vec<U16String>> {
+    let opts = opts_arg(options, env)?;
     let mut ast = ast_from_object(&ast_obj)?;
-    let r = api::expand_ast(&mut ast, &opts).map_err(err);
+    let r = api::expand_ast_units(&mut ast, &opts)
+        .map(|v| v.into_iter().map(U16String).collect())
+        .map_err(err);
     clear_transform();
     r
 }
 
 #[napi]
-pub fn compile_ast(ast_obj: JsObject, options: Option<BracesOptions>, env: Env) -> Result<String> {
-    let opts = to_core_options(options, env);
+pub fn compile_ast(ast_obj: JsObject, options: Option<JsObject>, env: Env) -> Result<U16String> {
+    let opts = opts_arg(options, env)?;
     let mut ast = ast_from_object(&ast_obj)?;
-    let r = api::compile_ast(&mut ast, &opts).map_err(err);
+    let r = api::compile_ast(&mut ast, &opts)
+        .map(|s| U16String(s.encode_utf16().collect()))
+        .map_err(err);
     clear_transform();
     r
 }
@@ -377,10 +443,10 @@ pub fn compile_ast(ast_obj: JsObject, options: Option<BracesOptions>, env: Env) 
 #[napi]
 pub fn stringify(
     input: Either<String, JsObject>,
-    options: Option<BracesOptions>,
+    options: Option<JsObject>,
     env: Env,
 ) -> Result<String> {
-    let opts = to_core_options(options, env);
+    let opts = opts_arg(options, env)?;
     let r = match input {
         Either::A(s) => api::stringify_str(&s, &opts).map_err(err),
         Either::B(obj) => {
@@ -393,6 +459,6 @@ pub fn stringify(
 }
 
 #[napi]
-pub fn stringify_string(pattern: String, options: Option<BracesOptions>, env: Env) -> Result<String> {
+pub fn stringify_string(pattern: String, options: Option<JsObject>, env: Env) -> Result<String> {
     stringify(Either::A(pattern), options, env)
 }

@@ -102,11 +102,12 @@ pub fn exceeds_limit(args: &[Vec<u16>], opt_step: Option<f64>, range_limit: Rang
 }
 
 /// Deep flatten of queue values (port of `utils.flatten`).
-pub fn flatten<T: Clone>(items: Vec<QueueVal<T>>) -> Vec<T> {
+/// Deep-flatten queue slots into a flat list, moving values (no clones).
+pub fn flatten<T>(items: Vec<QueueVal<T>>) -> Vec<T> {
     let mut out = Vec::new();
-    fn rec<T: Clone>(v: &QueueVal<T>, out: &mut Vec<T>) {
+    fn rec<T>(v: QueueVal<T>, out: &mut Vec<T>) {
         match v {
-            QueueVal::One(x) => out.push(x.clone()),
+            QueueVal::One(x) => out.push(x),
             QueueVal::Many(xs) => {
                 for x in xs {
                     rec(x, out);
@@ -114,7 +115,7 @@ pub fn flatten<T: Clone>(items: Vec<QueueVal<T>>) -> Vec<T> {
             }
         }
     }
-    for v in &items {
+    for v in items {
         rec(v, &mut out);
     }
     out

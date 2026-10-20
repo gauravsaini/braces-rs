@@ -217,8 +217,18 @@ fn fill_numbers(
     let mut range: Vec<Item> = Vec::new();
     let mut index = 0usize;
     let def = default_format_numbers(to_number);
+    // Hot loop fast path: plain integer ranges with no transform render each
+    // value with a single allocation (JS `String(v).padStart(max_len,'0')`).
+    // `|a|,|b| <= 2^53` keeps every value exactly representable.
+    let int_fast = opts.transform.is_none()
+        && !opts.to_regex
+        && step.fract() == 0.0
+        && a.abs() <= 9007199254740991.0
+        && b.abs() <= 9007199254740991.0;
     while if descending { a >= b } else { a <= b } {
-        if opts.to_regex && step > 1.0 {
+        if int_fast {
+            range.push(Item::Str(padded_int_str(a, max_len)));
+        } else if opts.to_regex && step > 1.0 {
             if a < 0.0 {
                 parts_neg.push(a.abs());
             } else {
@@ -254,6 +264,41 @@ fn fill_numbers(
     Ok(FillOut::List(
         range.into_iter().map(item_to_units).collect(),
     ))
+}
+
+/// Single-allocation zero-padded integer rendering for the expand fast
+/// path: `String(value).padStart(max_len, '0')` semantics, '-' kept outside
+/// the padding. `a` must be integral with `|a| <= 2^53`.
+fn padded_int_str(a: f64, max_len: usize) -> Vec<u16> {
+    let neg = a < 0.0; // -0 is normalized to +0 before the loop
+    let mut n = a.abs() as u64;
+    let mut buf = [0u16; 24];
+    let mut i = buf.len();
+    if n == 0 {
+        i -= 1;
+        buf[i] = b'0' as u16;
+    }
+    while n > 0 {
+        i -= 1;
+        buf[i] = b'0' as u16 + (n % 10) as u16;
+        n /= 10;
+    }
+    let digits = &buf[i..];
+    let body_target = if neg {
+        max_len.saturating_sub(1)
+    } else {
+        max_len
+    };
+    let zeros = body_target.saturating_sub(digits.len());
+    let mut out = Vec::with_capacity(zeros + digits.len() + (neg as usize));
+    if neg {
+        out.push(b'-' as u16);
+    }
+    for _ in 0..zeros {
+        out.push(b'0' as u16);
+    }
+    out.extend_from_slice(digits);
+    out
 }
 
 fn item_to_units(it: Item) -> Vec<u16> {
@@ -352,6 +397,19 @@ fn fill_letters(
 
     if opts.to_regex && step == 1.0 {
         return Ok(FillOut::Regex(to_range_letters(min, max)));
+    }
+
+    // Hot loop fast path: no transform means every element is one
+    // `fromCharCode` unit — build the list directly, pre-sized.
+    if opts.transform.is_none() && !opts.to_regex {
+        let span = (b - a).abs();
+        let count = (span / step.max(1.0)).floor() as usize + 1;
+        let mut range: Vec<Vec<u16>> = Vec::with_capacity(count.min(10001));
+        while if descending { a >= b } else { a <= b } {
+            range.push(vec![jsnum::from_char_code(a)]);
+            a = if descending { a - step } else { a + step };
+        }
+        return Ok(FillOut::List(range));
     }
 
     let mut range: Vec<Item> = Vec::new();

@@ -1,1 +1,1 @@
-{"note":"napi build green on box; JS smoke 2008/2008 byte-identical (typed errors via wrapper). Running bench.","stage":"bench","ts":"2026-10-20T15:35:00+11:00"}
+{"note":"Perf fixes: num_to_string int fast-path, flatten move-semantics, no-brace fast path, napi options fast path, UTF-16 output conversion. Rebuilding on box.","stage":"bench-round2","ts":"2026-10-20T16:35:00+11:00"}
