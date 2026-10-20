@@ -92,3 +92,16 @@ implementation can reproduce those recordings. The exact checker
   `["{a,a}","b{a,a}"]` with dedupe, `[]`.
 - 1 × `expand("{1..5000}", {rangeLimit:false})` — generator recorded
   `.length` (5000) instead of the array.
+
+## 7. CVE-2026-93687 depth guard (behavioral note)
+
+The JS reference dies with `RangeError: Maximum call stack size exceeded`
+on brace chains at a depth of ~4,999 (empirically verified on the box).
+braces-rs completes those same inputs successfully — a safe-direction
+difference: ours never crashes, and the reference throws rather than
+returning a result, so no caller can depend on the throwing behavior.
+ASTs deeper than `MAX_AST_DEPTH = 10_000` (reachable only via
+programmatic ASTs, never via string input under the 10,000-char cap) get
+a typed `RangeError: Maximum call stack size exceeded` from the core
+walkers and the napi AST-object converter, instead of a native stack
+overflow. No input the reference handles successfully can hit the guard.

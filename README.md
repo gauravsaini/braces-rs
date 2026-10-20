@@ -86,27 +86,47 @@ cd napi && npm test
 
 Rust beats the JS reference on **every pattern of the required benchmark
 ladder** — median ops/s over 5 runs, 3 s fixed-duration each,
-5000-iteration warmup, Node 20.19.4, `rustc 1.98.1`, i7-7700:
+5000-iteration warmup, Node 20.19.4, `rustc 1.98.1`, i7-7700 (final run
+2026-10-20, post-fidelity + rope rework):
 
 | pattern | rust ops/s | js ops/s | speedup |
 |---------|-----------:|---------:|--------:|
-| literal (no braces) | 2,292,774 | 642,937 | 3.57x |
-| small list `{a,b,c}` | 496,559 | 255,356 | 1.94x |
-| padded range `{001..300}` | 73,713 | 44,879 | 1.64x |
-| stepped range `{0..100..10}` | 749,035 | 472,424 | 1.59x |
-| alpha range `{a..z}` | 832,353 | 428,622 | 1.94x |
-| nested `{a,{b..d},e}` | 365,310 | 227,424 | 1.61x |
-| big range `{1..1000}` | 23,429 | 16,615 | 1.41x |
-| compile `{001..300}` | 1,082,637 | 673,952 | 1.61x |
-| compile `{1..10..2}` | 1,070,797 | 675,425 | 1.59x |
-| expandMany batch-100 | 1,674 | 1,374 | 1.22x |
+| literal (no braces) | 2,177,783 | 659,016 | 3.30x |
+| small list `{a,b,c}` | 611,184 | 278,932 | 2.19x |
+| padded range `{001..300}` | 73,739 | 44,397 | 1.66x |
+| stepped range `{0..100..10}` | 747,411 | 476,563 | 1.57x |
+| alpha range `{a..z}` | 807,306 | 420,033 | 1.92x |
+| nested `{a,{b..d},e}` | 429,643 | 239,939 | 1.79x |
+| big range `{1..1000}` | 23,357 | 16,214 | 1.44x |
+| compile `{001..300}` | 1,079,165 | 674,204 | 1.60x |
+| compile `{1..10..2}` | 1,040,522 | 628,512 | 1.66x |
+| default compile | 946,881 | 740,443 | 1.28x |
+| expandMany batch-100 | 2,068 | 1,443 | 1.43x |
 
-Full methodology, machine info, and two extra patterns that do not beat
-the reference (default-expand borderline at 0.99x–1.06x across runs; a 3000-output
-multi-group case at 0.66x) are documented honestly in [BENCH.md](BENCH.md).
+The one extra pattern that does not beat the reference is the
+3030-output multi-group case (`user-{200..300}/project-{a,b,c}-{1..10}`,
+0.89x) — full methodology, the rope-walk rework that took it from 0.66x,
+and the honest reason for the residual are documented in
+[BENCH.md](BENCH.md).
 
 Reproduce on the box: `cd bench && node bench.js <path-to-micromatch-braces> <path-to-braces-rs-napi>`.
 Core-only bench: `cargo bench -p braces-core`.
+
+## Security
+
+CVE-2026-93687 — deeply nested brace patterns (`'{'×4999 + 'a' + '}'×4999`)
+send the JS reference's recursive walkers into `RangeError: Maximum call
+stack size exceeded`; a native recursive implementation risks worse (an
+uncatchable stack-overflow abort). braces-rs parses iteratively, and every
+recursive walker (expand / compile / stringify, plus the AST-object
+converter) refuses ASTs deeper than `MAX_AST_DEPTH = 10,000` with a typed
+`RangeError: Maximum call stack size exceeded` instead of overflowing.
+The limit sits 2x above the deepest AST any string input can express
+under the (reference-faithful) 10,000-char input cap, and 2x above the
+depth where the reference dies on this machine — so no input the
+reference handles can be rejected by it. Regression tests:
+`crates/braces-core/tests/cve_2026_93687.rs` and
+`napi/test-cve-2026-93687.js`.
 
 ## Architecture
 

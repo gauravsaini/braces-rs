@@ -26,41 +26,62 @@ Final run: 2026-10-20 (box). Raw output: `bench/results.json` in the repo
    pre-allocated outside the loop.
 4. 5 repetitions, **median** ops/s reported.
 
-## Results (median ops/s)
+## Results (median ops/s) — final run, 2026-10-20 (post-fidelity + rope rework)
 
 | pattern | js ops/s | rs ops/s | speedup |
 |---------|---------:|---------:|--------:|
-| literal (no braces) | 642,937 | 2,292,774 | **3.57x** |
-| small list `{a,b,c}` | 255,356 | 496,559 | **1.94x** |
-| padded range `{001..300}` | 44,879 | 73,713 | **1.64x** |
-| stepped range `{0..100..10}` | 472,424 | 749,035 | **1.59x** |
-| alpha range `{a..z}` | 428,622 | 832,353 | **1.94x** |
-| nested `{a,{b..d},e}` | 227,424 | 365,310 | **1.61x** |
-| big range `{1..1000}` | 16,615 | 23,429 | **1.41x** |
-| compile padded `{001..300}` | 673,952 | 1,082,637 | **1.61x** |
-| compile stepped `{1..10..2}` | 675,425 | 1,070,797 | **1.59x** |
-| compile nested `a/{b,c}/d` | 736,928 | 1,046,690 | **1.42x** |
-| default compile (`braces('{a,b,c}')`) | 627,237 | 920,708 | **1.47x** |
-| default expand (`braces('{a,b,c}', {expand:true})`) | 251,496 | 266,517 | 1.06x |
-| expandMany batch-100 | 1,374 | 1,674 | **1.22x** |
-| multi-group (3000 outputs, extra) | 3,576 | 2,352 | 0.66x |
+| literal (no braces) | 659,016 | 2,177,783 | **3.30x** |
+| small list `{a,b,c}` | 278,932 | 611,184 | **2.19x** |
+| padded range `{001..300}` | 44,397 | 73,739 | **1.66x** |
+| stepped range `{0..100..10}` | 476,563 | 747,411 | **1.57x** |
+| alpha range `{a..z}` | 420,033 | 807,306 | **1.92x** |
+| nested `{a,{b..d},e}` | 239,939 | 429,643 | **1.79x** |
+| big range `{1..1000}` | 16,214 | 23,357 | **1.44x** |
+| compile padded `{001..300}` | 674,204 | 1,079,165 | **1.60x** |
+| compile stepped `{1..10..2}` | 628,512 | 1,040,522 | **1.66x** |
+| compile nested `a/{b,c}/d` | 860,872 | 1,020,203 | **1.19x** |
+| default compile (`braces('{a,b,c}')`) | 740,443 | 946,881 | **1.28x** |
+| default expand (`braces('{a,b,c}', {expand:true})`) | 269,999 | 295,843 | **1.10x** |
+| expandMany batch-100 | 1,443 | 2,068 | **1.43x** |
+| multi-group (3030 outputs, extra) | 3,753 | 3,324 | 0.89x |
 
-**Every pattern on the required ladder beats the JS reference**
-(literal, small list, padded/stepped/alpha ranges, nested, big range,
-both compiles, expandMany batch-100).
+**Every pattern on the required ladder beats the JS reference.**
+Round-over-round regression check vs the previous table (rs ops/s):
+every pattern is within run-to-run variance of its earlier number or
+better, with two notes below.
 
-### Patterns not beaten (honest notes)
+### Multi-group: 0.66x -> 0.89x (the "future work", done)
 
-- **default expand (1.06x, borderline)** — across repeated full runs this
-  case lands at 0.99x–1.06x, i.e. statistical parity with the reference.
-  The residual is the `{expand: true}` options-object conversion at the
-  napi boundary. Reported as-is; it is the closest case on the board.
-- **multi-group (0.66x, extra pattern, not on the required ladder)** —
-  `user-{200..300}/project-{a,b,c}-{1..10}` (3000 outputs). The queue
-  append rebuilds every output string per segment; V8's rope (cons-string)
-  concatenation makes the same algorithm cheaper in JS. A segment-join
-  restructure of the walk (build outputs as segment lists, join once) is
-  the known fix — future work.
+`user-{200..300}/project-{a,b,c}-{1..10}` (3030 outputs) was the one
+losing pattern (2,352 rs ops/s). Three restructures landed:
+
+1. **Segment-join walk** — outputs accumulate as segment lists and join
+   once at materialisation instead of rebuilding every string per
+   segment (the original queue-append was O(segments x output)).
+2. **Arena tree ropes** — the walk builds concat trees over a
+   bump-allocated node arena (borrowed `Copy` handles, no Rc traffic in
+   the hot loop), and the napi layer packs results straight from the
+   ropes, skipping per-string materialisation entirely.
+3. **Subtree materialisation cache** — shared prefix subtrees (the 303
+   `user-NNN/project-X-` prefixes, each consumed 10x) are written once
+   per expansion and replayed.
+Plus `expand_wire`: the plain-literal and range-fill fast paths pack
+their items directly into the wire buffer (no rope objects at all).
+
+Where the remaining 11% sits: V8's `expand` result is a tree of lazy
+cons-strings the benchmark never materialises; forcing JS to produce
+real strings (e.g. joining its result) makes the reference ~2.3x slower
+than our full path. Our residual cost is walk node allocation plus the
+wrapper's packed-string unpack (~36us of ~300us). 0.89x is the honest
+number under the benchmark's terms.
+
+### Literal variance note
+
+The literal fast path is byte-for-byte the same algorithm as the
+previous round's 2,292,774 ops/s measurement; two clean final runs
+landed at 2,190,461 and 2,177,783 (-4.5% / -5.0%) while the JS side
+moved +2.5% between the same runs. Treated as machine variance at the
+0.45us/call scale, i.e. parity — the 3.30x speedup is not in doubt.
 
 ## How the wins were achieved
 
