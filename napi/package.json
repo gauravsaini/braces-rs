@@ -1,1 +1,39 @@
-{"description":"Fast Rust drop-in replacement for micromatch/braces v3 (brace expansion) via napi-rs","devDependencies":{"@napi-rs/cli":"2.18.4"},"engines":{"node":">= 10"},"files":["index.js","binding.js","binding.d.ts","*.node"],"license":"MIT","main":"index.js","name":"braces-rs","napi":{"name":"braces-rs","triples":{"additional":["aarch64-apple-darwin","aarch64-unknown-linux-gnu","aarch64-unknown-linux-musl"],"defaults":true}},"repository":{"type":"git","url":"https://github.com/gauravsaini/braces-rs"},"scripts":{"build":"napi build --platform --release --js binding.js --dts binding.d.ts --manifest-path ../crates/braces-napi/Cargo.toml --package-json-path package.json","build:debug":"napi build --platform --js binding.js --dts binding.d.ts --manifest-path ../crates/braces-napi/Cargo.toml --package-json-path package.json"},"types":"binding.d.ts","version":"0.1.0"}
+{
+  "description": "Fast Rust drop-in replacement for micromatch/braces v3 (brace expansion) via napi-rs",
+  "devDependencies": {
+    "@napi-rs/cli": "2.18.4"
+  },
+  "engines": {
+    "node": ">= 10"
+  },
+  "files": [
+    "index.js",
+    "binding.js",
+    "binding.d.ts",
+    "*.node"
+  ],
+  "license": "MIT",
+  "main": "index.js",
+  "name": "braces-rs",
+  "napi": {
+    "name": "braces-rs",
+    "triples": {
+      "additional": [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl"
+      ],
+      "defaults": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gauravsaini/braces-rs"
+  },
+  "scripts": {
+    "build": "node node_modules/@napi-rs/cli/scripts/index.js build --platform --release --js binding.js --dts binding.d.ts --cargo-cwd ../crates/braces-napi",
+    "build:debug": "node node_modules/@napi-rs/cli/scripts/index.js build --platform --js binding.js --dts binding.d.ts --cargo-cwd ../crates/braces-napi"
+  },
+  "types": "binding.d.ts",
+  "version": "0.1.0"
+}

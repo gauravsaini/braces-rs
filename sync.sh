@@ -13,7 +13,7 @@ ph="${HTTPS_PROXY#*://}"
 ph="${ph#*@}"
 ph="${ph%%:*}"
 
-rsync -a --delete \
+rsync -a --no-perms --no-times --delete \
   --exclude '.git/' \
   --exclude 'target/' \
   --exclude 'node_modules/' \

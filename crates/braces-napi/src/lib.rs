@@ -46,9 +46,10 @@ pub struct BracesOptions {
 }
 
 fn err(e: BracesError) -> Error {
-    // Reason carries the bare JS message (error.name fidelity for the
-    // thrown value is a documented divergence — see DIVERGENCES.md).
-    Error::from_reason(e.message())
+    // The reason carries `Name: message`; the hand-written wrapper maps it
+    // back to a typed JS error (RangeError/SyntaxError/TypeError) so the
+    // drop-in surface keeps instanceof fidelity.
+    Error::from_reason(e.to_js_string())
 }
 
 thread_local! {
