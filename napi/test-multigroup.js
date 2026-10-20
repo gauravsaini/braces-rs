@@ -47,8 +47,8 @@ for (const p of CASES) {
   const got = ours.expand(p);
   assert.deepStrictEqual(got, want, `expand mismatch for ${JSON.stringify(p)}`);
   checks++;
-  // the default fn in compile mode must match too
-  assert.strictEqual(ours(p), ref(p), `default compile mismatch for ${JSON.stringify(p)}`);
+  // the default fn (compile mode) returns a 1-element array — deep-compare
+  assert.deepStrictEqual(ours(p), ref(p), `default compile mismatch for ${JSON.stringify(p)}`);
   checks++;
   // expand mode of the default fn
   assert.deepStrictEqual(ours(p, { expand: true }), ref(p, { expand: true }), `default expand mismatch for ${JSON.stringify(p)}`);
