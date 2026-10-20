@@ -15,6 +15,7 @@ ph="${ph%%:*}"
 
 rsync -a --no-perms --no-times --delete \
   --exclude '.git/' \
+  --exclude 'bench/results.json' \
   --exclude 'target/' \
   --exclude 'node_modules/' \
   --exclude '*.node' \
