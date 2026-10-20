@@ -12,10 +12,11 @@
 
 use braces_core::api::{self, CreateResult, Value as CoreValue};
 use braces_core::ast::{Ast, Node, NodeType};
-use braces_core::options::StepVal;
-use braces_core::{BracesError, Options, RangeLimit, Transform, TransformOut};
+use braces_core::options::{StepVal, TransformOut};
+use braces_core::{BracesError, Options, RangeLimit, Transform};
 use napi::bindgen_prelude::*;
-use napi::{Env, JsFunction, JsObject, JsUnknown};
+use napi::{Env, JsFunction, JsObject, NapiRaw};
+use napi_derive::napi;
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -87,11 +88,11 @@ fn call_js_transform(v: f64, i: usize) -> TransformOut {
             }
             let mut ty: napi::sys::napi_valuetype = 0;
             napi::sys::napi_typeof(env, result, &mut ty);
-            if ty == napi::sys::napi_valuetype::napi_number {
+            if ty == 3 { // napi_number
                 let mut d = 0.0f64;
                 napi::sys::napi_get_value_double(env, result, &mut d);
                 TransformOut::Num(d)
-            } else if ty == napi::sys::napi_valuetype::napi_string {
+            } else if ty == 1 { // napi_string
                 let mut len = 0usize;
                 napi::sys::napi_get_value_string_utf16(
                     env,
@@ -161,7 +162,8 @@ fn to_core_options(o: Option<BracesOptions>, env: Env) -> Options {
             },
             Either::B(func) => {
                 let raw_env = env.raw();
-                let raw_func = func.raw();
+                let raw_func = unsafe { func.raw() };
+                let _ = &func;
                 TRANSFORM_FN.with(|c| *c.borrow_mut() = Some((raw_env, raw_func)));
                 Transform::Custom(Arc::new(|v: f64, i: usize| call_js_transform(v, i)))
             }
@@ -244,7 +246,7 @@ fn ast_from_object(obj: &JsObject) -> Result<Ast> {
         parent: Option<usize>,
         prev: Option<usize>,
     ) -> Result<usize> {
-        let ty_s: String = obj.get_named_property::<JsUnknown>("type")?.try_into()?;
+        let ty_s: String = obj.get_named_property("type")?;
         let ty = match ty_s.as_str() {
             "root" => NodeType::Root,
             "bos" => NodeType::Bos,
