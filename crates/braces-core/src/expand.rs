@@ -22,6 +22,7 @@ use crate::fill::{fill, FillOptions, FillOut};
 use crate::options::Options;
 use crate::stringify::stringify_subtree;
 use crate::utils::{enclose_brace, exceeds_limit, flatten, reduce, QueueVal};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// One immutable piece of an output string (text node value, fill item,
@@ -35,47 +36,71 @@ fn seg_of(s: &[u16]) -> Seg {
 #[derive(Debug)]
 enum RopeNode {
     Leaf(Seg),
-    Concat(Rope, Rope),
+    Concat { l: u32, r: u32 },
 }
 
-/// An output string under construction: a binary tree of shared
-/// segments. Cloning a `Rope` is one `Rc` bump; concatenating is one
-/// `Rc` allocation — segment bytes are never copied until the single
-/// final join (`to_units` / `write_into`).
-#[derive(Clone, Debug)]
+/// Bump-allocated rope-node arena, one per expand call (the V8
+/// young-generation equivalent: node allocation is a `Vec` push, a few
+/// nanoseconds, and ropes are plain `Copy` indices — no `Rc` bumps at
+/// all in the walk).
+type RopeArena = Rc<RefCell<Vec<RopeNode>>>;
+
+fn new_arena() -> RopeArena {
+    // Index 0 is reserved for the empty rope; real nodes start at 1.
+    Rc::new(RefCell::new(vec![RopeNode::Leaf(Rc::from(&[][..]))]))
+}
+
+/// An output string under construction: a copyable handle into a shared
+/// rope-node arena. Concatenation is a single arena push; the segment
+/// bytes are copied exactly once, at the final join.
+#[derive(Clone, Debug, Default)]
 pub struct Rope {
-    node: Option<Rc<RopeNode>>,
-    len: usize, // total UTF-16 units
-}
-
-impl Default for Rope {
-    fn default() -> Self {
-        Self::empty()
-    }
+    arena: Option<RopeArena>,
+    idx: u32, // 0 = empty
+    len: usize,
 }
 
 impl Rope {
+    fn with_arena(arena: &RopeArena) -> Self {
+        Rope {
+            arena: Some(Rc::clone(arena)),
+            idx: 0,
+            len: 0,
+        }
+    }
+
     pub fn empty() -> Self {
-        Rope { node: None, len: 0 }
+        Rope {
+            arena: None,
+            idx: 0,
+            len: 0,
+        }
+    }
+
+    fn arena(&self) -> RopeArena {
+        self.arena.clone().unwrap_or_else(new_arena)
+    }
+
+    fn alloc_node(&self, node: RopeNode) -> u32 {
+        let arena = self.arena();
+        let mut a = arena.borrow_mut();
+        a.push(node);
+        (a.len() - 1) as u32
     }
 
     pub fn from_units(v: Vec<u16>) -> Self {
-        if v.is_empty() {
-            return Rope::empty();
-        }
-        let len = v.len();
-        Rope {
-            node: Some(Rc::new(RopeNode::Leaf(Rc::from(v)))),
-            len,
-        }
+        Self::from_units_in(&new_arena(), v)
     }
 
-    fn leaf(seg: Seg) -> Self {
-        let len = seg.len();
-        Rope {
-            node: Some(Rc::new(RopeNode::Leaf(seg))),
-            len,
+    fn from_units_in(arena: &RopeArena, v: Vec<u16>) -> Self {
+        if v.is_empty() {
+            return Rope::with_arena(arena);
         }
+        let len = v.len();
+        let mut r = Rope::with_arena(arena);
+        r.idx = r.alloc_node(RopeNode::Leaf(Rc::from(v)));
+        r.len = len;
+        r
     }
 
     /// Total length in UTF-16 code units.
@@ -83,30 +108,54 @@ impl Rope {
         self.len
     }
 
-    /// `self + other` as a new rope (one allocation, no byte copies).
-    fn concat(&self, other: &Rope) -> Rope {
-        match (&self.node, &other.node) {
-            (None, _) => other.clone(),
-            (_, None) => self.clone(),
-            (Some(_), Some(_)) => Rope {
-                node: Some(Rc::new(RopeNode::Concat(self.clone(), other.clone()))),
-                len: self.len + other.len,
-            },
+    /// Adopt `other` into this rope's arena (deep transplant), used only
+    /// when arenas differ — inside one expand call all ropes share the
+    /// arena, so this stays O(1).
+    fn other_idx(&self, other: &Rope) -> u32 {
+        match (&self.arena, &other.arena) {
+            (Some(a), Some(b)) if Rc::ptr_eq(a, b) => other.idx,
+            _ => {
+                // Foreign arena: materialise once into a leaf. Rare by
+                // construction (only tests mix arenas).
+                let units = other.to_units();
+                self.alloc_node(RopeNode::Leaf(Rc::from(units)))
+            }
         }
+    }
+
+    /// `self + other` as a new rope (one arena push, no byte copies).
+    fn concat(&self, other: &Rope) -> Rope {
+        if self.idx == 0 {
+            return other.clone();
+        }
+        if other.idx == 0 {
+            return self.clone();
+        }
+        let l = self.idx;
+        let r = self.other_idx(other);
+        let mut out = Rope {
+            arena: Some(self.arena()),
+            idx: 0,
+            len: self.len + other.len,
+        };
+        out.idx = out.alloc_node(RopeNode::Concat { l, r });
+        out
     }
 
     /// `self + "{" + inner + "}"` — the enclose path for invalid braces.
     fn concat_enclosed(&self, inner: &Rope) -> Rope {
-        self.concat(&Rope::leaf(seg_of(&[b'{' as u16])))
-            .concat(inner)
-            .concat(&Rope::leaf(seg_of(&[b'}' as u16])))
+        let arena = self.arena();
+        let l = Rope::from_units_in(&arena, vec![b'{' as u16]);
+        let rr = Rope::from_units_in(&arena, vec![b'}' as u16]);
+        self.concat(&l).concat(inner).concat(&rr)
     }
 
     /// `"{" + self + "}"` as a single rope (q-empty enclose branch).
     fn enclosed(&self) -> Rope {
-        Rope::leaf(seg_of(&[b'{' as u16]))
-            .concat(self)
-            .concat(&Rope::leaf(seg_of(&[b'}' as u16])))
+        let arena = self.arena();
+        let l = Rope::from_units_in(&arena, vec![b'{' as u16]);
+        let r = Rope::from_units_in(&arena, vec![b'}' as u16]);
+        l.concat(self).concat(&r)
     }
 
     /// Append this rope's bytes to `out` — the one and only full copy of
@@ -114,22 +163,21 @@ impl Rope {
     /// pattern's segment count (concat chains lean right by construction
     /// and realistic patterns stay well under a hundred deep).
     pub fn write_into(&self, out: &mut Vec<u16>) {
-        fn rec(node: &RopeNode, out: &mut Vec<u16>) {
-            match node {
+        fn rec(arena: &[RopeNode], idx: u32, out: &mut Vec<u16>) {
+            match &arena[idx as usize] {
                 RopeNode::Leaf(s) => out.extend_from_slice(s),
-                RopeNode::Concat(l, r) => {
-                    if let Some(n) = &l.node {
-                        rec(n, out);
-                    }
-                    if let Some(n) = &r.node {
-                        rec(n, out);
-                    }
+                RopeNode::Concat { l, r } => {
+                    rec(arena, *l, out);
+                    rec(arena, *r, out);
                 }
             }
         }
-        if let Some(n) = &self.node {
-            rec(n, out);
+        if self.idx == 0 {
+            return;
         }
+        let arena = self.arena();
+        let a = arena.borrow();
+        rec(&a, self.idx, out);
     }
 
     /// Join the segments into the final string.
@@ -138,19 +186,113 @@ impl Rope {
         self.write_into(&mut out);
         out
     }
+
+    /// Append many ropes into `out`. Ropes produced by one expand() call
+    /// share a single arena — it is borrowed exactly once (the RefCell
+    /// borrow per rope in `write_into` is the dominant per-output cost on
+    /// multi-thousand-output expansions).
+    pub fn write_many(ropes: &[Rope], out: &mut Vec<u16>) {
+        fn rec(arena: &[RopeNode], idx: u32, out: &mut Vec<u16>) {
+            match &arena[idx as usize] {
+                RopeNode::Leaf(s) => out.extend_from_slice(s),
+                RopeNode::Concat { l, r } => {
+                    rec(arena, *l, out);
+                    rec(arena, *r, out);
+                }
+            }
+        }
+        let shared = ropes.first().and_then(|r| r.arena.clone());
+        let all_shared = match &shared {
+            Some(a) => ropes
+                .iter()
+                .all(|r| r.arena.as_ref().is_some_and(|o| Rc::ptr_eq(o, a))),
+            None => false,
+        };
+        if let (Some(a), true) = (shared, all_shared) {
+            let arena = a.borrow();
+            for r in ropes {
+                if r.idx != 0 {
+                    rec(&arena, r.idx, out);
+                }
+            }
+        } else {
+            for r in ropes {
+                r.write_into(out);
+            }
+        }
+    }
 }
 
-type Q = QueueVal<Rope>;
+/// Walk-internal rope handle: a `Copy` (index, length) pair into the
+/// Expander's plain `Vec` node arena — no `Rc`/`RefCell` traffic in the
+/// hot loop (bump allocation only, the V8 young-gen equivalent).
+#[derive(Clone, Copy, Debug, Default)]
+struct W {
+    idx: u32, // 0 = empty
+    len: usize,
+}
+
+impl W {
+    const EMPTY: W = W { idx: 0, len: 0 };
+}
+
+type Q = QueueVal<W>;
 
 fn units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-/// Port of `append(queue = '', stash = '', enclose = false)`.
-fn append(queue: Option<Q>, stash: Q, enclose: bool) -> Vec<Q> {
+fn concat_in(arena: &mut Vec<RopeNode>, l: W, r: W) -> W {
+    if l.idx == 0 {
+        return r;
+    }
+    if r.idx == 0 {
+        return l;
+    }
+    let len = l.len + r.len;
+    arena.push(RopeNode::Concat { l: l.idx, r: r.idx });
+    W {
+        idx: (arena.len() - 1) as u32,
+        len,
+    }
+}
+
+fn leaf_in(arena: &mut Vec<RopeNode>, v: Vec<u16>) -> W {
+    if v.is_empty() {
+        return W::EMPTY;
+    }
+    let len = v.len();
+    arena.push(RopeNode::Leaf(Rc::from(v)));
+    W {
+        idx: (arena.len() - 1) as u32,
+        len,
+    }
+}
+
+/// `s + "{" + inner + "}"` (enclose path for invalid braces).
+fn concat_enclosed_in(arena: &mut Vec<RopeNode>, s: W, inner: W) -> W {
+    let l = leaf_in(arena, vec![b'{' as u16]);
+    let r = leaf_in(arena, vec![b'}' as u16]);
+    let a = concat_in(arena, s, l);
+    let b = concat_in(arena, a, inner);
+    concat_in(arena, b, r)
+}
+
+/// `"{" + w + "}"` (q-empty enclose branch).
+fn enclosed_in(arena: &mut Vec<RopeNode>, w: W) -> W {
+    let l = leaf_in(arena, vec![b'{' as u16]);
+    let r = leaf_in(arena, vec![b'}' as u16]);
+    let a = concat_in(arena, l, w);
+    concat_in(arena, a, r)
+}
+
+/// Port of `append(queue = '', stash = '', enclose = false)`, returning
+/// the flattened output ropes directly (the reference's deep-flatten of
+/// the nested result is fused into the build).
+fn append(arena: &mut Vec<RopeNode>, queue: Option<Q>, stash: Q, enclose: bool) -> Vec<W> {
     // [].concat(queue): None (JS undefined) → ['']; One → [it]; Many → elements
     let q: Vec<Q> = match queue {
-        None => vec![QueueVal::One(Rope::empty())],
+        None => vec![QueueVal::One(W::EMPTY)],
         Some(QueueVal::One(s)) => vec![QueueVal::One(s)],
         Some(QueueVal::Many(v)) => v,
     };
@@ -159,60 +301,60 @@ fn append(queue: Option<Q>, stash: Q, enclose: bool) -> Vec<Q> {
         QueueVal::Many(v) => v,
     };
     if st.is_empty() {
-        return q;
+        return flatten::<W>(q);
     }
     if q.is_empty() {
+        let flat = flatten::<W>(st);
         if enclose {
-            return flatten::<Rope>(st)
-                .into_iter()
-                .map(|e| QueueVal::One(e.enclosed()))
-                .collect();
+            return flat.into_iter().map(|e| enclosed_in(arena, e)).collect();
         }
-        return st;
+        return flat;
     }
-    let mut result: Vec<Q> = Vec::new();
+    let mut result: Vec<W> = Vec::new();
     for item in q {
         match item {
             QueueVal::Many(arr) => {
                 for value in arr {
-                    let r = append(Some(value), QueueVal::Many(st.clone()), enclose);
-                    result.push(QueueVal::Many(r));
+                    result.extend(append(arena, Some(value), QueueVal::Many(st.clone()), enclose));
                 }
             }
             QueueVal::One(s) => {
                 for ele in &st {
                     match ele {
                         QueueVal::One(e) => {
-                            let c = if enclose {
-                                s.concat_enclosed(e)
+                            result.push(if enclose {
+                                concat_enclosed_in(arena, s, *e)
                             } else {
-                                s.concat(e)
-                            };
-                            result.push(QueueVal::One(c));
+                                concat_in(arena, s, *e)
+                            });
                         }
                         QueueVal::Many(a) => {
-                            let r = append(
-                                Some(QueueVal::One(s.clone())),
+                            result.extend(append(
+                                arena,
+                                Some(QueueVal::One(s)),
                                 QueueVal::Many(a.clone()),
                                 enclose,
-                            );
-                            result.push(QueueVal::Many(r));
+                            ));
                         }
                     }
                 }
             }
         }
     }
-    flatten::<Rope>(result)
-        .into_iter()
-        .map(QueueVal::One)
-        .collect()
+    result
+}
+
+/// Wrap flat append output as a single queue element (as the reference's
+/// walk pushes the whole expansion list as one queue entry).
+fn as_queue(flat: Vec<W>) -> Q {
+    QueueVal::Many(flat.into_iter().map(QueueVal::One).collect())
 }
 
 pub struct Expander<'a> {
     ast: &'a mut Ast,
     queues: Vec<Vec<Q>>,
     opts: &'a Options,
+    arena: Vec<RopeNode>,
 }
 
 impl<'a> Expander<'a> {
@@ -246,16 +388,18 @@ impl<'a> Expander<'a> {
 
         if invalid == Some(true) || dollar {
             let s = stringify_subtree(&self.ast.nodes, node, self.opts.escape_invalid);
+            let leaf = leaf_in(&mut self.arena, s);
             let popped = self.queues[qid].pop();
-            let r = append(popped, QueueVal::One(Rope::from_units(s)), false);
-            self.queues[qid].push(QueueVal::Many(r));
+            let r = append(&mut self.arena, popped, QueueVal::One(leaf), false);
+            self.queues[qid].push(as_queue(r));
             return Ok(());
         }
 
         if ty == NodeType::Brace && invalid != Some(true) && nchildren == 2 {
+            let leaf = leaf_in(&mut self.arena, units("{}"));
             let popped = self.queues[qid].pop();
-            let r = append(popped, QueueVal::One(Rope::from_units(units("{}"))), false);
-            self.queues[qid].push(QueueVal::Many(r));
+            let r = append(&mut self.arena, popped, QueueVal::One(leaf), false);
+            self.queues[qid].push(as_queue(r));
             return Ok(());
         }
 
@@ -275,14 +419,13 @@ impl<'a> Expander<'a> {
                 FillOut::List(items) if !items.is_empty() => QueueVal::Many(
                     items
                         .into_iter()
-                        .map(|i| QueueVal::One(Rope::from_units(i)))
+                        .map(|i| QueueVal::One(leaf_in(&mut self.arena, i)))
                         .collect(),
                 ),
-                _ => QueueVal::One(Rope::from_units(stringify_subtree(
-                    &self.ast.nodes,
-                    node,
-                    self.opts.escape_invalid,
-                ))),
+                _ => QueueVal::One(leaf_in(
+                    &mut self.arena,
+                    stringify_subtree(&self.ast.nodes, node, self.opts.escape_invalid),
+                )),
             };
             let popped = self.queues[qid].pop();
             match (popped, stash) {
@@ -295,8 +438,8 @@ impl<'a> Expander<'a> {
                     self.queues[qid].push(QueueVal::Many(vec![one]));
                 }
                 (Some(p), stash) => {
-                    let r = append(Some(p), stash, false);
-                    self.queues[qid].push(QueueVal::Many(r));
+                    let r = append(&mut self.arena, Some(p), stash, false);
+                    self.queues[qid].push(as_queue(r));
                 }
             }
             self.ast.node_mut(node).children.clear();
@@ -312,25 +455,26 @@ impl<'a> Expander<'a> {
             let cty = self.ast.node(*child).ty;
             if cty == NodeType::Comma && node_ty == NodeType::Brace {
                 if i == 1 {
-                    self.queues[queue_id].push(QueueVal::One(Rope::empty()));
+                    self.queues[queue_id].push(QueueVal::One(W::EMPTY));
                 }
-                self.queues[queue_id].push(QueueVal::One(Rope::empty()));
+                self.queues[queue_id].push(QueueVal::One(W::EMPTY));
                 continue;
             }
             if cty == NodeType::Close {
                 let stash = std::mem::take(&mut self.queues[queue_id]);
                 let popped = self.queues[qid].pop();
-                let r = append(popped, QueueVal::Many(stash), enclose);
-                self.queues[qid].push(QueueVal::Many(r));
+                let r = append(&mut self.arena, popped, QueueVal::Many(stash), enclose);
+                self.queues[qid].push(as_queue(r));
                 continue;
             }
             let cval = self.ast.node(*child).value.clone();
             if cty != NodeType::Open {
                 if let Some(v) = cval {
                     if !v.is_empty() {
+                        let leaf = leaf_in(&mut self.arena, v);
                         let popped = self.queues[queue_id].pop();
-                        let r = append(popped, QueueVal::One(Rope::from_units(v)), false);
-                        self.queues[queue_id].push(QueueVal::Many(r));
+                        let r = append(&mut self.arena, popped, QueueVal::One(leaf), false);
+                        self.queues[queue_id].push(as_queue(r));
                         continue;
                     }
                 }
@@ -352,11 +496,22 @@ pub fn expand(ast: &mut Ast, opts: &Options) -> Result<Vec<Rope>, BracesError> {
         ast,
         queues: vec![Vec::new(); n],
         opts,
+        // Index 0 is the reserved empty node, matching W::EMPTY.
+        arena: vec![RopeNode::Leaf(Rc::from(&[][..]))],
     };
     let root = expander.ast.root;
     expander.walk(root, None)?;
     let q = std::mem::take(&mut expander.queues[root]);
-    Ok(flatten::<Rope>(q))
+    let ws = flatten::<W>(q);
+    let shared: RopeArena = Rc::new(RefCell::new(std::mem::take(&mut expander.arena)));
+    Ok(ws
+        .into_iter()
+        .map(|w| Rope {
+            arena: Some(Rc::clone(&shared)),
+            idx: w.idx,
+            len: w.len,
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -403,33 +558,100 @@ mod tests {
         assert_eq!(s(&Rope::empty().enclosed().to_units()), "{}");
     }
 
+    // ---- walk-handle (W) append, over a local arena ----
+
+    fn test_arena() -> Vec<RopeNode> {
+        vec![RopeNode::Leaf(Rc::from(&[][..]))]
+    }
+
+    fn w_of(arena: &mut Vec<RopeNode>, parts: &[&str]) -> W {
+        let mut w = W::EMPTY;
+        for p in parts {
+            let leaf = leaf_in(arena, units(p));
+            w = concat_in(arena, w, leaf);
+        }
+        w
+    }
+
+    fn w_str(arena: &[RopeNode], w: W) -> String {
+        fn rec(arena: &[RopeNode], idx: u32, out: &mut Vec<u16>) {
+            match &arena[idx as usize] {
+                RopeNode::Leaf(seg) => out.extend_from_slice(seg),
+                RopeNode::Concat { l, r } => {
+                    rec(arena, *l, out);
+                    rec(arena, *r, out);
+                }
+            }
+        }
+        let mut v = Vec::new();
+        if w.idx != 0 {
+            rec(arena, w.idx, &mut v);
+        }
+        s(&v)
+    }
+
     #[test]
-    fn append_cartesian_over_ropes() {
-        let q = Some(QueueVal::Many(vec![
-            QueueVal::One(rope_of(&["a"])),
-            QueueVal::One(rope_of(&["b"])),
-        ]));
-        let stash = QueueVal::Many(vec![
-            QueueVal::One(rope_of(&["1"])),
-            QueueVal::One(rope_of(&["2"])),
-        ]);
-        let out = append(q, stash, false);
-        let flat: Vec<String> = flatten::<Rope>(out)
-            .iter()
-            .map(|r| s(&r.to_units()))
-            .collect();
+    fn append_cartesian_over_walk_ropes() {
+        let mut arena = test_arena();
+        let a = w_of(&mut arena, &["a"]);
+        let b = w_of(&mut arena, &["b"]);
+        let one = w_of(&mut arena, &["1"]);
+        let two = w_of(&mut arena, &["2"]);
+        let q = Some(QueueVal::Many(vec![QueueVal::One(a), QueueVal::One(b)]));
+        let stash = QueueVal::Many(vec![QueueVal::One(one), QueueVal::One(two)]);
+        let out = append(&mut arena, q, stash, false);
+        let flat: Vec<String> = out.iter().map(|w| w_str(&arena, *w)).collect();
         assert_eq!(flat, ["a1", "a2", "b1", "b2"]);
     }
 
     #[test]
     fn append_enclose_branch() {
         // q empty + enclose: every stash element is brace-wrapped.
-        let stash = QueueVal::Many(vec![QueueVal::One(rope_of(&["a,b"]))]);
-        let out = append(Some(QueueVal::Many(vec![])), stash, true);
-        let flat: Vec<String> = flatten::<Rope>(out)
-            .iter()
-            .map(|r| s(&r.to_units()))
-            .collect();
+        let mut arena = test_arena();
+        let ab = w_of(&mut arena, &["a,b"]);
+        let stash = QueueVal::Many(vec![QueueVal::One(ab)]);
+        let out = append(&mut arena, Some(QueueVal::Many(vec![])), stash, true);
+        let flat: Vec<String> = out.iter().map(|w| w_str(&arena, *w)).collect();
         assert_eq!(flat, ["{a,b}"]);
+    }
+
+    #[test]
+    fn append_segment_join_multigroup_shape() {
+        // user-{200..202} x {a,b} x {1..2} through raw appends: outputs
+        // are segment trees, joined once here.
+        let mut arena = test_arena();
+        let pre = w_of(&mut arena, &["user-"]);
+        let mut cur: Vec<W> = vec![pre];
+        for seg in ["200", "201", "202"] {
+            let _ = seg;
+        }
+        // stage 1: prefix x range options
+        let opts1: Vec<W> = ["200", "201", "202"].iter().map(|t| w_of(&mut arena, &[t])).collect();
+        let mut next = Vec::new();
+        for c in &cur {
+            for o in &opts1 {
+                next.push(concat_in(&mut arena, *c, *o));
+            }
+        }
+        cur = next;
+        // stage 2: x list options
+        let mid = w_of(&mut arena, &["/p-"]);
+        cur = cur.iter().map(|c| concat_in(&mut arena, *c, mid)).collect();
+        let opts2: Vec<W> = ["a", "b"].iter().map(|t| w_of(&mut arena, &[t])).collect();
+        let mut next = Vec::new();
+        for c in &cur {
+            for o in &opts2 {
+                next.push(concat_in(&mut arena, *c, *o));
+            }
+        }
+        cur = next;
+        let got: Vec<String> = cur.iter().map(|w| w_str(&arena, *w)).collect();
+        assert_eq!(
+            got,
+            [
+                "user-200/p-a", "user-200/p-b", "user-201/p-a", "user-201/p-b", "user-202/p-a",
+                "user-202/p-b"
+            ]
+        );
     }
 }

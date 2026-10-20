@@ -545,9 +545,7 @@ fn pack_ropes(items: Vec<api::Rope>) -> U16String {
         buf.push((pos & 0xFFFF) as u16);
         buf.push((pos >> 16) as u16);
     }
-    for it in &items {
-        it.write_into(&mut buf);
-    }
+    api::Rope::write_many(&items, &mut buf);
     U16String(buf)
 }
 #[napi(object)]
