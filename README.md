@@ -51,14 +51,36 @@ Errors mirror the reference, including typed classes: `RangeError` for
 ## Correctness
 
 A 2008-fixture conformance corpus, generated from the live JavaScript
-reference, is run twice:
+reference, is run three ways:
 
-- `cargo test -p braces-core` — the Rust core, 2008/2008 green
-- `node napi/smoke.js` — the full JS-level surface through the napi
-  wrapper, 2008/2008 byte-identical (including error classes)
+- `cargo test --release -p braces-core` — the Rust core (conformance
+  fixtures, multi-group regression fixtures, unit tests), all green
+- `node napi/test-multigroup.js` — the multi-group pattern and 16
+  variants byte-identical to the reference (71 assertions)
+- `node tools/check-conformance.js` — the **exact** JS-level gate:
+  1981/2008 fixtures byte-identical through the napi wrapper (value JSON
+  equality, error name+message equality); the 27 remaining are corpus
+  representation artifacts (generator recorded non-string inputs as
+  `String()` text or logged result lengths), each documented in
+  [tools/conformance-report.md](tools/conformance-report.md)
 
 The only known divergences are documented in [DIVERGENCES.md](DIVERGENCES.md)
 (non-string-input V8 message wording, off the Node-20 surface).
+
+## Testing
+
+Run the whole gate (on the box, where the binding is built):
+
+```sh
+# Rust core: conformance + multi-group + unit tests
+cargo test --release -p braces-core
+# exact napi-wrapper conformance (exit 0 = zero real divergences)
+node tools/check-conformance.js
+# multi-group byte-identity vs the JS reference
+BRACES_REF=<path-to-micromatch-braces> node napi/test-multigroup.js
+# or the package's own test script (from napi/)
+cd napi && npm test
+```
 
 ## Performance
 
