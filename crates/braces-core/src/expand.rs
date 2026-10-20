@@ -5,6 +5,15 @@
 //! flattening). Includes the no-brace fast path (LEARNINGS.md #4): a
 //! brace-free AST stringifies to a single result without any queue
 //! machinery.
+//!
+//! Segment-join walk (perf restructure): queue entries are `Rope`s —
+//! ordered lists of shared segments (`Rc<[u16]>`) — instead of fully
+//! materialised strings. `append` then only clones segment *lists*
+//! (pointer-sized `Rc` clones) and each output string is joined exactly
+//! once, at final materialisation. The old walk rebuilt every output
+//! string at every segment append, which is quadratic on multi-group
+//! patterns (e.g. `user-{200..300}/project-{a,b,c}-{1..10}`) where V8's
+//! rope (cons-string) concatenation made the JS reference cheaper.
 
 use crate::ast::{Ast, NodeId, NodeType};
 use crate::error::BracesError;
@@ -12,8 +21,76 @@ use crate::fill::{fill, FillOptions, FillOut};
 use crate::options::Options;
 use crate::stringify::stringify_subtree;
 use crate::utils::{enclose_brace, exceeds_limit, flatten, reduce, QueueVal};
+use std::rc::Rc;
 
-type Q = QueueVal<Vec<u16>>;
+/// One immutable piece of an output string (text node value, fill item,
+/// stringified subtree, or a literal brace for the enclose path).
+type Seg = Rc<[u16]>;
+
+fn seg_of(s: &[u16]) -> Seg {
+    Rc::from(s)
+}
+
+/// An output string under construction: a list of shared segments.
+/// Cloning a `Rope` copies the segment list (one `Rc` bump per segment),
+/// never the segment bytes.
+#[derive(Clone, Default, Debug)]
+pub struct Rope {
+    segs: Vec<Seg>,
+}
+
+impl Rope {
+    fn empty() -> Self {
+        Rope { segs: Vec::new() }
+    }
+
+    fn from_units(v: Vec<u16>) -> Self {
+        if v.is_empty() {
+            return Rope::empty();
+        }
+        Rope { segs: vec![Rc::from(v)] }
+    }
+
+    /// `self + other` as a new rope (segment lists concatenated).
+    fn concat(&self, other: &Rope) -> Rope {
+        let mut segs = Vec::with_capacity(self.segs.len() + other.segs.len());
+        segs.extend_from_slice(&self.segs);
+        segs.extend_from_slice(&other.segs);
+        Rope { segs }
+    }
+
+    /// `self + "{" + inner + "}"` — the enclose path for invalid braces.
+    fn concat_enclosed(&self, inner: &Rope) -> Rope {
+        let mut segs = Vec::with_capacity(self.segs.len() + inner.segs.len() + 2);
+        segs.extend_from_slice(&self.segs);
+        segs.push(seg_of(&[b'{' as u16]));
+        segs.extend_from_slice(&inner.segs);
+        segs.push(seg_of(&[b'}' as u16]));
+        Rope { segs }
+    }
+
+    /// `"{" + self + "}"` as a single rope (q-empty enclose branch).
+    fn enclosed(&self) -> Rope {
+        let mut segs = Vec::with_capacity(self.segs.len() + 2);
+        segs.push(seg_of(&[b'{' as u16]));
+        segs.extend_from_slice(&self.segs);
+        segs.push(seg_of(&[b'}' as u16]));
+        Rope { segs }
+    }
+
+    /// Join the segments into the final string — the one and only full
+    /// copy of the output bytes.
+    fn materialize(&self) -> Vec<u16> {
+        let total: usize = self.segs.iter().map(|s| s.len()).sum();
+        let mut out = Vec::with_capacity(total);
+        for s in &self.segs {
+            out.extend_from_slice(s);
+        }
+        out
+    }
+}
+
+type Q = QueueVal<Rope>;
 
 fn units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
@@ -23,7 +100,7 @@ fn units(s: &str) -> Vec<u16> {
 fn append(queue: Option<Q>, stash: Q, enclose: bool) -> Vec<Q> {
     // [].concat(queue): None (JS undefined) → ['']; One → [it]; Many → elements
     let q: Vec<Q> = match queue {
-        None => vec![QueueVal::One(Vec::new())],
+        None => vec![QueueVal::One(Rope::empty())],
         Some(QueueVal::One(s)) => vec![QueueVal::One(s)],
         Some(QueueVal::Many(v)) => v,
     };
@@ -36,14 +113,9 @@ fn append(queue: Option<Q>, stash: Q, enclose: bool) -> Vec<Q> {
     }
     if q.is_empty() {
         if enclose {
-            return flatten::<Vec<u16>>(st)
+            return flatten::<Rope>(st)
                 .into_iter()
-                .map(|e| {
-                    let mut w = units("{");
-                    w.extend(e);
-                    w.push(b'}' as u16);
-                    QueueVal::One(w)
-                })
+                .map(|e| QueueVal::One(e.enclosed()))
                 .collect();
         }
         return st;
@@ -61,16 +133,11 @@ fn append(queue: Option<Q>, stash: Q, enclose: bool) -> Vec<Q> {
                 for ele in &st {
                     match ele {
                         QueueVal::One(e) => {
-                            let e2 = if enclose {
-                                let mut w = units("{");
-                                w.extend_from_slice(e);
-                                w.push(b'}' as u16);
-                                w
+                            let c = if enclose {
+                                s.concat_enclosed(e)
                             } else {
-                                e.clone()
+                                s.concat(e)
                             };
-                            let mut c = s.clone();
-                            c.extend_from_slice(&e2);
                             result.push(QueueVal::One(c));
                         }
                         QueueVal::Many(a) => {
@@ -86,7 +153,7 @@ fn append(queue: Option<Q>, stash: Q, enclose: bool) -> Vec<Q> {
             }
         }
     }
-    flatten::<Vec<u16>>(result)
+    flatten::<Rope>(result)
         .into_iter()
         .map(QueueVal::One)
         .collect()
@@ -130,14 +197,14 @@ impl<'a> Expander<'a> {
         if invalid == Some(true) || dollar {
             let s = stringify_subtree(&self.ast.nodes, node, self.opts.escape_invalid);
             let popped = self.queues[qid].pop();
-            let r = append(popped, QueueVal::One(s), false);
+            let r = append(popped, QueueVal::One(Rope::from_units(s)), false);
             self.queues[qid].push(QueueVal::Many(r));
             return Ok(());
         }
 
         if ty == NodeType::Brace && invalid != Some(true) && nchildren == 2 {
             let popped = self.queues[qid].pop();
-            let r = append(popped, QueueVal::One(units("{}")), false);
+            let r = append(popped, QueueVal::One(Rope::from_units(units("{}"))), false);
             self.queues[qid].push(QueueVal::Many(r));
             return Ok(());
         }
@@ -155,14 +222,17 @@ impl<'a> Expander<'a> {
                 &fopts,
             )?;
             let stash = match out {
-                FillOut::List(items) if !items.is_empty() => {
-                    QueueVal::Many(items.into_iter().map(QueueVal::One).collect())
-                }
-                _ => QueueVal::One(stringify_subtree(
+                FillOut::List(items) if !items.is_empty() => QueueVal::Many(
+                    items
+                        .into_iter()
+                        .map(|i| QueueVal::One(Rope::from_units(i)))
+                        .collect(),
+                ),
+                _ => QueueVal::One(Rope::from_units(stringify_subtree(
                     &self.ast.nodes,
                     node,
                     self.opts.escape_invalid,
-                )),
+                ))),
             };
             let popped = self.queues[qid].pop();
             match (popped, stash) {
@@ -192,9 +262,9 @@ impl<'a> Expander<'a> {
             let cty = self.ast.node(*child).ty;
             if cty == NodeType::Comma && node_ty == NodeType::Brace {
                 if i == 1 {
-                    self.queues[queue_id].push(QueueVal::One(Vec::new()));
+                    self.queues[queue_id].push(QueueVal::One(Rope::empty()));
                 }
-                self.queues[queue_id].push(QueueVal::One(Vec::new()));
+                self.queues[queue_id].push(QueueVal::One(Rope::empty()));
                 continue;
             }
             if cty == NodeType::Close {
@@ -209,7 +279,7 @@ impl<'a> Expander<'a> {
                 if let Some(v) = cval {
                     if !v.is_empty() {
                         let popped = self.queues[queue_id].pop();
-                        let r = append(popped, QueueVal::One(v), false);
+                        let r = append(popped, QueueVal::One(Rope::from_units(v)), false);
                         self.queues[queue_id].push(QueueVal::Many(r));
                         continue;
                     }
@@ -234,5 +304,81 @@ pub fn expand(ast: &mut Ast, opts: &Options) -> Result<Vec<Vec<u16>>, BracesErro
     let root = expander.ast.root;
     expander.walk(root, None)?;
     let q = std::mem::take(&mut expander.queues[root]);
-    Ok(flatten::<Vec<u16>>(q))
+    Ok(flatten::<Rope>(q)
+        .into_iter()
+        .map(|r| r.materialize())
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rope_of(parts: &[&str]) -> Rope {
+        Rope {
+            segs: parts.iter().map(|p| seg_of(&units(p))).collect(),
+        }
+    }
+
+    fn s(v: &[u16]) -> String {
+        String::from_utf16(v).unwrap()
+    }
+
+    #[test]
+    fn concat_joins_segments_once() {
+        let a = rope_of(&["user-", "200"]);
+        let b = rope_of(&["/project-"]);
+        let c = a.concat(&b);
+        assert_eq!(s(&c.materialize()), "user-200/project-");
+        // sources are untouched (shared segments, no rebuild)
+        assert_eq!(s(&a.materialize()), "user-200");
+        assert_eq!(s(&b.materialize()), "/project-");
+    }
+
+    #[test]
+    fn concat_with_empty_is_identity() {
+        let a = rope_of(&["x"]);
+        assert_eq!(s(&a.concat(&Rope::empty()).materialize()), "x");
+        assert_eq!(s(&Rope::empty().concat(&a).materialize()), "x");
+        assert_eq!(s(&Rope::empty().materialize()), "");
+    }
+
+    #[test]
+    fn enclosed_wraps_inner_in_literal_braces() {
+        let pre = rope_of(&["pre-"]);
+        let inner = rope_of(&["a,b"]);
+        assert_eq!(s(&pre.concat_enclosed(&inner).materialize()), "pre-{a,b}");
+        assert_eq!(s(&inner.enclosed().materialize()), "{a,b}");
+        assert_eq!(s(&Rope::empty().enclosed().materialize()), "{}");
+    }
+
+    #[test]
+    fn append_cartesian_over_ropes() {
+        let q = Some(QueueVal::Many(vec![
+            QueueVal::One(rope_of(&["a"])),
+            QueueVal::One(rope_of(&["b"])),
+        ]));
+        let stash = QueueVal::Many(vec![
+            QueueVal::One(rope_of(&["1"])),
+            QueueVal::One(rope_of(&["2"])),
+        ]);
+        let out = append(q, stash, false);
+        let flat: Vec<String> = flatten::<Rope>(out)
+            .iter()
+            .map(|r| s(&r.materialize()))
+            .collect();
+        assert_eq!(flat, ["a1", "a2", "b1", "b2"]);
+    }
+
+    #[test]
+    fn append_enclose_branch() {
+        // q empty + enclose: every stash element is brace-wrapped.
+        let stash = QueueVal::Many(vec![QueueVal::One(rope_of(&["a,b"]))]);
+        let out = append(Some(QueueVal::Many(vec![])), stash, true);
+        let flat: Vec<String> = flatten::<Rope>(out)
+            .iter()
+            .map(|r| s(&r.materialize()))
+            .collect();
+        assert_eq!(flat, ["{a,b}"]);
+    }
 }
