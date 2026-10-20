@@ -38,6 +38,51 @@ fn is_plain_literal(units: &[u16]) -> bool {
     })
 }
 
+/// A bare range pattern `{X..Y}` / `{X..Y..S}` (integer endpoints with raw
+/// sign/padding preserved, or single-letter endpoints). For such patterns
+/// parse+walk reduces exactly to `exceedsLimit` + `fill-range` on the raw
+/// endpoint strings, so the fast path calls those directly.
+fn simple_range(units: &[u16]) -> Option<(Vec<u16>, Vec<u16>, Option<Vec<u16>>)> {
+    let n = units.len();
+    if n < 6 || units[0] != b'{' as u16 || units[n - 1] != b'}' as u16 {
+        return None;
+    }
+    let inner = &units[1..n - 1];
+    let find_dd = |s: &[u16]| -> Option<usize> {
+        if s.len() < 2 {
+            return None;
+        }
+        (0..s.len() - 1).find(|&i| s[i] == b'.' as u16 && s[i + 1] == b'.' as u16)
+    };
+    let i = find_dd(inner)?;
+    let a = &inner[..i];
+    let rest = &inner[i + 2..];
+    let (b, c) = match find_dd(rest) {
+        Some(j) => (&rest[..j], Some(rest[j + 2..].to_vec())),
+        None => (rest, None),
+    };
+    let is_int = |s: &[u16]| -> bool {
+        let s = if !s.is_empty() && (s[0] == b'+' as u16 || s[0] == b'-' as u16) {
+            &s[1..]
+        } else {
+            s
+        };
+        !s.is_empty() && s.iter().all(|&c| (b'0' as u16..=b'9' as u16).contains(&c))
+    };
+    let is_alpha = |s: &[u16]| -> bool {
+        s.len() == 1 && (s[0] as u8).is_ascii_alphabetic()
+    };
+    if !((is_int(a) && is_int(b)) || (is_alpha(a) && is_alpha(b))) {
+        return None;
+    }
+    if let Some(ref step) = c {
+        if !is_int(step) {
+            return None;
+        }
+    }
+    Some((a.to_vec(), b.to_vec(), c))
+}
+
 /// The same maxLength check `parse` performs, for the fast paths.
 fn check_max_length(units: &[u16], opts: &Options) -> Result<(), BracesError> {
     let max = match opts.max_length {
@@ -136,6 +181,26 @@ pub fn expand_units(input: &str, opts: &Options) -> Result<Vec<Vec<u16>>, Braces
         }
         return Ok(apply_post_units(vec![units], opts));
     }
+    if let Some((s, e, st)) = simple_range(&units) {
+        check_max_length(&units, opts)?;
+        let mut args: Vec<Vec<u16>> = vec![s.clone(), e.clone()];
+        if let Some(step) = &st {
+            args.push(step.clone());
+        }
+        if crate::utils::exceeds_limit(&args, opts.step_num(), opts.range_limit) {
+            return Err(BracesError::RangeLimit);
+        }
+        let fopts = crate::fill::FillOptions::from_options(opts, false);
+        return match crate::fill::fill(&s, Some(&e), st.as_deref(), &fopts)? {
+            crate::fill::FillOut::List(items) if !items.is_empty() => {
+                Ok(apply_post_units(items, opts))
+            }
+            // Reference fallback: an empty fill stringifies the brace
+            // verbatim (simple-range chars need no re-escaping).
+            crate::fill::FillOut::List(_) => Ok(apply_post_units(vec![units], opts)),
+            crate::fill::FillOut::Regex(_) => unreachable!(),
+        };
+    }
     let mut ast = parse_units(&units, opts)?;
     expand_ast_units(&mut ast, opts)
 }
@@ -172,6 +237,29 @@ pub fn compile_units(input: &str, opts: &Options) -> Result<Vec<u16>, BracesErro
     let units = to_units(input);
     if is_plain_literal(&units) {
         check_max_length(&units, opts)?;
+        return Ok(units);
+    }
+    if let Some((s, e, st)) = simple_range(&units) {
+        // Mirror compile's walk range branch: fill with toRegex options,
+        // wrap in parens when the regex is longer than one unit.
+        check_max_length(&units, opts)?;
+        let fopts = crate::fill::FillOptions::from_compile_options(opts);
+        if let crate::fill::FillOut::Regex(range) =
+            crate::fill::fill(&s, Some(&e), st.as_deref(), &fopts)?
+        {
+            if !range.is_empty() {
+                if range.len() > 1 {
+                    let mut out = Vec::with_capacity(range.len() + 2);
+                    out.push(b'(' as u16);
+                    out.extend_from_slice(&range);
+                    out.push(b')' as u16);
+                    return Ok(out);
+                }
+                return Ok(range);
+            }
+        }
+        // Empty regex: the walk falls through to the children, which for a
+        // bare range brace stringify back to the pattern itself.
         return Ok(units);
     }
     let mut ast = parse_units(&units, opts)?;

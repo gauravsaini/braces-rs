@@ -1,1 +1,1 @@
-{"note":"Perf fixes: num_to_string int fast-path, flatten move-semantics, no-brace fast path, napi options fast path, UTF-16 output conversion. Rebuilding on box.","stage":"bench-round2","ts":"2026-10-20T16:35:00+11:00"}
+{"note":"All spot checks green with margin. Full bench round 3 (final) running.","stage":"bench-final","ts":"2026-10-20T18:12:00+11:00"}

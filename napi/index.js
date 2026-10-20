@@ -7,8 +7,15 @@
  * (`binding.js`). The export shape mirrors the original exactly:
  * a callable default function with expand/compile/create/parse/stringify
  * attached. All heavy lifting happens in the Rust core; this file only
- * reproduces the reference's JS-level dispatch (string vs AST input) and
- * maps napi's `Name: message` errors back to typed JS errors.
+ * reproduces the reference's JS-level dispatch (string vs AST input),
+ * maps napi's `Name: message` errors back to typed JS errors, and unpacks
+ * the native layer's bulk string results.
+ *
+ * Bulk results cross the FFI boundary **packed** — one joined string plus
+ * a Uint32Array of end-offsets — because creating one JS string per
+ * element through N-API costs ~130ns/string, more than the reference's
+ * whole per-element budget on large expansions. Unpacking slices the
+ * joined string with `substring` (byte-identical results).
  */
 
 const native = require('./binding.js');
@@ -29,6 +36,58 @@ const rethrow = fn => (...args) => {
   }
 };
 
+/** Empty/absent options cross as `undefined` — zero per-field N-API reads. */
+const nopts = o => (o && Object.keys(o).length > 0 ? o : undefined);
+
+/** Unpack `{ offsets, data }` (end-offsets into one joined string). */
+function unpackStrings(p) {
+  const { offsets, data } = p;
+  const out = new Array(offsets.length);
+  let s = 0;
+  for (let i = 0; i < offsets.length; i++) {
+    const e = offsets[i];
+    out[i] = data.substring(s, e);
+    s = e;
+  }
+  return out;
+}
+
+/**
+ * Unpack the single-string packed format used by expand/expandAst/bracesFn:
+ * `[count: u32 as 2 chars][end-offsets: count × u32 as 2 chars][data]`.
+ */
+function unpackPacked(s) {
+  const count = (s.charCodeAt(0) | (s.charCodeAt(1) << 16)) >>> 0;
+  const out = new Array(count);
+  const base = 2 + count * 2;
+  let prev = 0;
+  for (let i = 0; i < count; i++) {
+    const off = (s.charCodeAt(2 + i * 2) | (s.charCodeAt(3 + i * 2) << 16)) >>> 0;
+    out[i] = s.substring(base + prev, base + off);
+    prev = off;
+  }
+  return out;
+}
+
+/** Unpack `{ offsets, rowEnds, data }` into an array of string arrays. */
+function unpackBatch(p) {
+  const { offsets, rowEnds, data } = p;
+  const rows = new Array(rowEnds.length);
+  let si = 0, s = 0;
+  for (let r = 0; r < rowEnds.length; r++) {
+    const end = rowEnds[r];
+    const row = new Array(end - si);
+    for (let i = si; i < end; i++) {
+      const e = offsets[i];
+      row[i - si] = data.substring(s, e);
+      s = e;
+    }
+    rows[r] = row;
+    si = end;
+  }
+  return rows;
+}
+
 const expandNative = rethrow(native.expand);
 const expandAstNative = rethrow(native.expandAst);
 const expandManyNative = rethrow(native.expandMany);
@@ -47,9 +106,10 @@ const isAstLike = v => v !== null && typeof v === 'object' && 'type' in v;
  * reference's dispatch (create() per pattern; array flattening), with the
  * default fn's expand&&nodupes dedupe.
  */
-const braces = (input, options = {}) => {
+const braces = (input, options) => {
+  const o = nopts(options);
   if (typeof input === 'string' || Array.isArray(input)) {
-    return bracesFnNative(input, options);
+    return unpackPacked(bracesFnNative(input, o));
   }
   const r = braces.create(input, options);
   const out = Array.isArray(r) ? r.slice() : [r];
@@ -62,11 +122,12 @@ const braces = (input, options = {}) => {
 /**
  * Parse the given pattern into an AST.
  */
-braces.parse = (input, options = {}) => {
+braces.parse = (input, options) => {
+  const o = nopts(options);
   if (typeof input !== 'string') {
     throw new TypeError('Expected a string');
   }
-  return parseNative(input, options);
+  return parseNative(input, o);
 };
 
 /**
@@ -74,9 +135,10 @@ braces.parse = (input, options = {}) => {
  * Non-string inputs mirror the reference: null/undefined throw reading
  * `.value`; non-AST values stringify to ''.
  */
-braces.stringify = (input, options = {}) => {
+braces.stringify = (input, options) => {
+  const o = nopts(options);
   if (typeof input === 'string' || isAstLike(input)) {
-    return stringifyNative(input, options);
+    return stringifyNative(input, o);
   }
   if (input === null || input === undefined) {
     throw new TypeError(`Cannot read properties of ${input === null ? 'null' : 'undefined'} (reading 'value')`);
@@ -90,15 +152,16 @@ braces.stringify = (input, options = {}) => {
  * Non-string inputs mirror the reference: null/undefined throw reading
  * `.invalid`; numbers/booleans/objects without a `type` compile to ''.
  */
-braces.compile = (input, options = {}) => {
+braces.compile = (input, options) => {
+  const o = nopts(options);
   if (typeof input === 'string') {
-    return compileNative(input, options);
+    return compileNative(input, o);
   }
   if (input === null || input === undefined) {
     throw new TypeError(`Cannot read properties of ${input === null ? 'null' : 'undefined'} (reading 'invalid')`);
   }
   if (isAstLike(input)) {
-    return compileAstNative(input, options);
+    return compileAstNative(input, o);
   }
   return '';
 };
@@ -110,9 +173,10 @@ braces.compile = (input, options = {}) => {
  * with the current V8 wording); objects without AST shape fail reading
  * `.length` inside the walk.
  */
-braces.expand = (input, options = {}) => {
+braces.expand = (input, options) => {
+  const o = nopts(options);
   if (typeof input === 'string') {
-    return expandNative(input, options);
+    return unpackPacked(expandNative(input, o));
   }
   if (input === null || input === undefined) {
     throw new TypeError(`Cannot set properties of ${input === null ? 'null' : 'undefined'} (setting 'queue')`);
@@ -124,7 +188,7 @@ braces.expand = (input, options = {}) => {
   if (!isAstLike(input)) {
     throw new TypeError("Cannot read properties of undefined (reading 'length')");
   }
-  return expandAstNative(input, options);
+  return unpackPacked(expandAstNative(input, o));
 };
 
 /**
@@ -134,15 +198,17 @@ braces.expand = (input, options = {}) => {
  * `.length`; other values have `.length === undefined`, so the
  * short-circuit is skipped and compile() yields '' (or expand() throws).
  */
-braces.create = (input, options = {}) => {
+braces.create = (input, options) => {
+  const o = nopts(options);
   if (typeof input === 'string') {
-    return createNative(input, options);
+    const r = createNative(input, o);
+    return typeof r === 'string' ? r : unpackStrings(r);
   }
   if (input === null || input === undefined) {
     throw new TypeError(`Cannot read properties of ${input === null ? 'null' : 'undefined'} (reading 'length')`);
   }
   if (options && options.expand === true) {
-    return braces.expand(input, options);
+    return braces.expand(input, o);
   }
   return '';
 };
@@ -151,7 +217,7 @@ braces.create = (input, options = {}) => {
  * Batch expansion: expands many patterns in a single native call
  * (amortises the FFI crossing; same results as calling expand per pattern).
  */
-braces.expandMany = (patterns, options = {}) => expandManyNative(patterns, options);
+braces.expandMany = (patterns, options) => unpackBatch(expandManyNative(patterns, nopts(options)));
 
 module.exports = braces;
 module.exports.default = braces;
