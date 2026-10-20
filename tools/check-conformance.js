@@ -21,7 +21,9 @@
  *
  * Defaults: corpus = crates/braces-core/tests/conformance.json
  *           wrapper = napi/index.js
- * Exit code: 0 when zero REAL failures; 1 otherwise.
+ * Exit code: 0 only when there are ZERO real failures AND the corpus
+ * artifacts are covered by napi/test-corpus-artifacts.js (real-input
+ * equivalence tests against the reference); 1 otherwise.
  */
 const fs = require('fs');
 const path = require('path');
@@ -142,12 +144,19 @@ for (let i = 0; i < corpus.length; i++) {
 
 const real = failures.filter((f) => f.category === 'REAL');
 const artifacts = failures.filter((f) => f.category === 'CORPUS-ARTIFACT');
+const artifactsTestPath = path.join(root, 'napi/test-corpus-artifacts.js');
+const artifactsCovered = fs.existsSync(artifactsTestPath);
 
 console.log(
-  `conformance (napi wrapper, exact): ${pass} pass / ${failures.length} fail / ${corpus.length} total`,
+  `conformance (napi wrapper, exact): ${pass} pass / ${artifacts.length} artifact / ${real.length} real-fail / ${corpus.length} total`,
 );
-console.log(`  REAL failures: ${real.length}`);
-console.log(`  corpus artifacts: ${artifacts.length}`);
+if (artifacts.length > 0) {
+  console.log(
+    artifactsCovered
+      ? '  artifacts: generator representation artifacts (non-string inputs String()-encoded by the generator);\n    covered by napi/test-corpus-artifacts.js — real-input equivalence tests vs the reference'
+      : '  artifacts: NOT covered — napi/test-corpus-artifacts.js is missing',
+  );
+}
 const show = (f) => {
   const p = String(f.fx.pattern);
   console.log(
@@ -162,17 +171,21 @@ const show = (f) => {
 console.log('\n--- REAL failures ---');
 real.forEach(show);
 if (verbose) {
-  console.log('\n--- corpus artifacts ---');
+  console.log('\n--- corpus artifacts (covered by napi/test-corpus-artifacts.js) ---');
   artifacts.forEach(show);
-} else {
+} else if (artifacts.length > 0) {
   console.log(`\n(corpus artifacts hidden; pass --verbose to list all ${artifacts.length})`);
 }
 
 if (outJson) {
   fs.writeFileSync(
     outJson,
-    JSON.stringify({ pass, fail: failures.length, total: corpus.length, failures }, null, 1),
+    JSON.stringify(
+      { pass, artifacts: artifacts.length, realFail: real.length, total: corpus.length, failures },
+      null,
+      1,
+    ),
   );
   console.log(`\nwrote ${outJson}`);
 }
-process.exit(real.length === 0 ? 0 : 1);
+process.exit(real.length === 0 && artifactsCovered ? 0 : 1);

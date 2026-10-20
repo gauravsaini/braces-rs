@@ -5,16 +5,18 @@
 //! `Ast`) and is processed as UTF-16 code units internally, so JS string
 //! semantics (length, charCodeAt, surrogate pairs) hold exactly.
 
-use crate::ast::Ast;
+use crate::ast::{Ast, NodeId, NodeType};
 use crate::compile;
 use crate::error::BracesError;
 use crate::expand;
 pub use crate::expand::Rope;
+use crate::fill::{fill, FillOptions, FillOut};
 use crate::jsnum;
 use crate::options::Options;
 use crate::parse;
 use crate::parse::MAX_LENGTH;
-use crate::stringify::stringify_ast as stringify_nodes;
+use crate::stringify::{stringify_ast as stringify_nodes, stringify_subtree};
+use crate::utils::{exceeds_limit, reduce, zeroish};
 use std::collections::HashSet;
 
 pub use crate::options::{RangeLimit, Transform};
@@ -223,7 +225,371 @@ fn expand_str_out(input: &str, opts: &Options) -> Result<ExpandOut, BracesError>
         };
     }
     let mut ast = parse_units(&units, opts)?;
+    crate::ast::check_depth(&ast.nodes, ast.root)?;
+    if let Some(flat) = flat_segments(&mut ast, opts) {
+        let segments = flat?;
+        return Ok(ExpandOut::Items(apply_post_units(
+            cartesian_items(&segments),
+            opts,
+        )));
+    }
     Ok(ExpandOut::Ropes(expand_ast_ropes(&mut ast, opts)?))
+}
+
+/// Pack plain items into the napi wire format: `[count: u32][cumulative
+/// offsets: u32 * count][data]`, all as UTF-16 units in one buffer.
+fn pack_items(items: &[Vec<u16>]) -> Vec<u16> {
+    let total: usize = items.iter().map(|v| v.len()).sum();
+    let mut buf: Vec<u16> = Vec::with_capacity(2 + items.len() * 2 + total);
+    let c = items.len() as u32;
+    buf.push((c & 0xFFFF) as u16);
+    buf.push((c >> 16) as u16);
+    let mut pos: u32 = 0;
+    for it in items {
+        pos += it.len() as u32;
+        buf.push((pos & 0xFFFF) as u16);
+        buf.push((pos >> 16) as u16);
+    }
+    for it in items {
+        buf.extend_from_slice(it);
+    }
+    buf
+}
+
+// ---------------------------------------------------------------------------
+// Flat-cartesian fast path.
+//
+// A pattern qualifies as flat when its root children are only value leaves
+// (text / dots / bos / eos) and simple braces — braces that the general
+// walk would expand in isolation to a plain item list, i.e. valid
+// range braces (handled by the identical `reduce` + `exceeds_limit` + `fill`
+// calls the walk uses) and valid list braces (comma-split groups of plain
+// values, computed with the walk's exact comma/empty-item semantics).
+// Anything else (nesting, parens, invalid/dollar-with-content quirks not
+// covered below) falls back to the general walk.
+//
+// The general walk is exactly a left-to-right cartesian product of the
+// per-segment expansions (each root-level stage pops the whole accumulated
+// queue and appends the next segment), so computing the cartesian product
+// directly yields byte-identical results — with zero rope-node allocation,
+// zero RefCell traffic, and a single sequential write into the wire buffer.
+//
+// `None` = not a flat pattern (caller uses the general walk). Errors are
+// `Some(Err)` and must propagate exactly like the walk's.
+
+/// Items of one top-level brace node in isolation (mirrors the walk's
+/// per-node branches: invalid/dollar, `{}`, ranges, then the list dance).
+fn flat_brace_items(
+    ast: &mut Ast,
+    node: NodeId,
+    opts: &Options,
+) -> Option<Result<Vec<Vec<u16>>, BracesError>> {
+    let (invalid, dollar, ty, nchildren, ranges, commas) = {
+        let n = ast.node(node);
+        (n.invalid, n.dollar, n.ty, n.children.len(), n.ranges, n.commas)
+    };
+    // invalid / dollar: the walk appends the stringified subtree as one item.
+    if invalid == Some(true) || dollar {
+        // `stringify_subtree` recurses — keep the CVE depth guard for
+        // this branch only (bail to the general path, which raises the
+        // typed error). Every other flat branch is structurally shallow:
+        // the list dance bails on any child with nodes, and the range
+        // branch recurses nowhere except its stringify fallback, which
+        // is guarded the same way below.
+        if crate::ast::tree_depth(&ast.nodes, node) > crate::ast::MAX_AST_DEPTH {
+            return None;
+        }
+        return Some(Ok(vec![stringify_subtree(
+            &ast.nodes,
+            node,
+            opts.escape_invalid,
+        )]));
+    }
+    // `{}`: the walk's literal-brace special case.
+    if ty == NodeType::Brace && invalid != Some(true) && nchildren == 2 {
+        return Some(Ok(vec![vec![b'{' as u16, b'}' as u16]]));
+    }
+    // Ranges: identical calls to the walk's branch (`reduce` mutates the
+    // range nodes exactly like the walk relies on).
+    if ranges > 0 {
+        let args = reduce(ast, node);
+        if exceeds_limit(&args, opts.step_num(), opts.range_limit) {
+            return Some(Err(BracesError::RangeLimit));
+        }
+        let fopts = FillOptions::from_options(opts, false);
+        let out = match fill(
+            args.first().map(|v| v.as_slice()).unwrap_or(&[]),
+            args.get(1).map(|v| v.as_slice()),
+            args.get(2).map(|v| v.as_slice()),
+            &fopts,
+        ) {
+            Ok(o) => o,
+            Err(e) => return Some(Err(e)),
+        };
+        return Some(Ok(match out {
+            FillOut::List(items) if !items.is_empty() => items,
+            _ => {
+                // Stringify fallback recurses over the subtree — same
+                // depth guard as the invalid branch.
+                if crate::ast::tree_depth(&ast.nodes, node) > crate::ast::MAX_AST_DEPTH {
+                    return None;
+                }
+                vec![stringify_subtree(&ast.nodes, node, opts.escape_invalid)]
+            }
+        }));
+    }
+    // List dance, at string level: the walk's queue dance with an empty
+    // incoming queue reduces to comma-split groups whose values are the
+    // plain concatenation of the group's text values, preserving the
+    // exact empty-item semantics (`{,a}` -> ["", "a"], `{a,,b}` ->
+    // ["a", "", "b"], `{,}` -> ["", ""]).
+    // `enclose` mirrors the walk's `enclose_brace` on this node
+    // (`zeroish` — without the mutation, which no consumer of a flat AST
+    // can observe since the walk is not run afterwards).
+    let enclose = zeroish(commas, ranges);
+    let children = ast.node(node).children.clone();
+    let mut groups: Vec<Vec<u16>> = vec![Vec::new()];
+    let mut saw_close = false;
+    for child in children {
+        let cn = ast.node(child);
+        match cn.ty {
+            NodeType::Open => {}
+            NodeType::Comma => groups.push(Vec::new()),
+            NodeType::Close => {
+                saw_close = true;
+                break;
+            }
+            _ => {
+                // A child the walk would recurse into is not flat.
+                if cn.has_nodes() {
+                    return None;
+                }
+                if let Some(v) = &cn.value {
+                    groups.last_mut().unwrap().extend_from_slice(v);
+                }
+            }
+        }
+    }
+    if !saw_close {
+        return None;
+    }
+    if enclose {
+        for it in &mut groups {
+            let mut w = Vec::with_capacity(it.len() + 2);
+            w.push(b'{' as u16);
+            w.extend_from_slice(it);
+            w.push(b'}' as u16);
+            *it = w;
+        }
+    }
+    Some(Ok(groups))
+}
+
+/// Per-segment item lists for the whole pattern: one `Vec<Vec<u16>>`
+/// (items) per top-level segment.
+fn flat_segments(
+    ast: &mut Ast,
+    opts: &Options,
+) -> Option<Result<Vec<Vec<Vec<u16>>>, BracesError>> {
+    let root = ast.root;
+    let children = ast.node(root).children.clone();
+    if children.is_empty() {
+        return None;
+    }
+    let mut segments: Vec<Vec<Vec<u16>>> = Vec::with_capacity(children.len());
+    for child in children {
+        let (ty, has_nodes, value) = {
+            let n = ast.node(child);
+            (n.ty, n.has_nodes(), n.value.clone())
+        };
+        match ty {
+            NodeType::Brace => match flat_brace_items(ast, child, opts) {
+                Some(Ok(items)) => segments.push(items),
+                Some(Err(e)) => return Some(Err(e)),
+                None => return None,
+            },
+            NodeType::Open | NodeType::Close => return None,
+            _ if has_nodes => return None,
+            // A leaf the walk would append as a plain value (text, dot,
+            // bos, eos, ...); an absent value is an empty factor.
+            _ => segments.push(vec![value.unwrap_or_default()]),
+        }
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    // Coalesce single-item segments into their neighbours: a one-item
+    // segment contributes the same bytes to every output, so folding it
+    // into the adjacent multi-item segment's items (prepend to the next
+    // segment, append to the previous at the tail) is byte-identical and
+    // cuts the per-output segment visits in the cartesian writers.
+    let mut merged: Vec<Vec<Vec<u16>>> = Vec::with_capacity(segments.len());
+    let mut pending: Vec<u16> = Vec::new();
+    for seg in segments {
+        if seg.len() == 1 {
+            pending.extend_from_slice(&seg[0]);
+            continue;
+        }
+        let mut seg = seg;
+        if !pending.is_empty() {
+            for item in &mut seg {
+                let mut w = Vec::with_capacity(pending.len() + item.len());
+                w.extend_from_slice(&pending);
+                w.extend_from_slice(item);
+                *item = w;
+            }
+            pending = Vec::new();
+        }
+        merged.push(seg);
+    }
+    if !pending.is_empty() {
+        match merged.last_mut() {
+            Some(last) => {
+                for item in last.iter_mut() {
+                    item.extend_from_slice(&pending);
+                }
+            }
+            None => merged.push(vec![pending]),
+        }
+    }
+    Some(Ok(merged))
+}
+
+/// Materialised cartesian product (string level), for the `Vec<String>`
+/// APIs. The general walk is a left-to-right cartesian product, so the
+/// last segment varies fastest — identical order.
+fn cartesian_items(segments: &[Vec<Vec<u16>>]) -> Vec<Vec<u16>> {
+    let mut result: Vec<Vec<u16>> = vec![Vec::new()];
+    for seg in segments {
+        let mut next = Vec::with_capacity(result.len().saturating_mul(seg.len()));
+        for prefix in &result {
+            for item in seg {
+                let mut v = Vec::with_capacity(prefix.len() + item.len());
+                v.extend_from_slice(prefix);
+                v.extend_from_slice(item);
+                next.push(v);
+            }
+        }
+        result = next;
+    }
+    result
+}
+
+/// Write the cartesian product into the wire format by level-by-level
+/// expansion: outputs of the first k segments are held as one staging
+/// buffer plus cumulative end offsets, then extended by the next
+/// segment's items. Prefix bytes are copied once per level in bulk
+/// instead of once per output per segment, and the final level's end
+/// offsets are exactly the wire header's cumulative offsets — no
+/// separate counting pass. `nodupes` falls back to the materialised
+/// path (rare, opt-in); `noempty` filters zero-length outputs while
+/// assembling the final buffer.
+fn flat_wire(segments: &[Vec<Vec<u16>>], opts: &Options) -> Option<Vec<u16>> {
+    let mut count: usize = 1;
+    for seg in segments {
+        if seg.is_empty() {
+            return Some(pack_items(&[]));
+        }
+        count = count.checked_mul(seg.len())?;
+    }
+    let _ = count;
+    if opts.nodupes {
+        return Some(pack_items(&apply_post_units(cartesian_items(segments), opts)));
+    }
+    // Level 0: the first segment's items, concatenated.
+    let mut data: Vec<u16> = Vec::new();
+    let mut ends: Vec<u32> = Vec::with_capacity(segments[0].len());
+    for item in &segments[0] {
+        data.extend_from_slice(item);
+        ends.push(data.len() as u32);
+    }
+    // Levels 1..: extend every current output by every next item.
+    for seg in &segments[1..] {
+        let seg_total: usize = seg.iter().map(|i| i.len()).sum();
+        let cur_count = ends.len();
+        let mut next: Vec<u16> =
+            Vec::with_capacity(data.len() * seg.len() + seg_total * cur_count);
+        let mut next_ends: Vec<u32> = Vec::with_capacity(cur_count * seg.len());
+        let mut start = 0usize;
+        for &end in &ends {
+            let out = &data[start..end as usize];
+            start = end as usize;
+            for item in seg {
+                next.extend_from_slice(out);
+                next.extend_from_slice(item);
+                next_ends.push(next.len() as u32);
+            }
+        }
+        data = next;
+        ends = next_ends;
+    }
+    // Assemble: header (count + cumulative ends) + data. `noempty`
+    // drops zero-length outputs (their bytes are nothing, so the data
+    // section is copied output-by-output only in that case).
+    let total = data.len();
+    if opts.noempty {
+        let kept: Vec<u32> = {
+            let mut k = Vec::with_capacity(ends.len());
+            let mut prev = 0u32;
+            for &e in &ends {
+                if e > prev {
+                    k.push(e - prev);
+                }
+                prev = e;
+            }
+            k
+        };
+        let kept_total: usize = kept.iter().map(|&l| l as usize).sum();
+        let mut buf: Vec<u16> = Vec::with_capacity(2 + kept.len() * 2 + kept_total);
+        let n = kept.len() as u32;
+        buf.push((n & 0xFFFF) as u16);
+        buf.push((n >> 16) as u16);
+        let mut pos: u32 = 0;
+        for &l in &kept {
+            pos += l;
+            buf.push((pos & 0xFFFF) as u16);
+            buf.push((pos >> 16) as u16);
+        }
+        let mut prev = 0usize;
+        let mut src = 0usize;
+        for &e in &ends {
+            let end = e as usize;
+            if end > prev {
+                buf.extend_from_slice(&data[src..end]);
+            }
+            src = end;
+            prev = end;
+        }
+        let _ = total;
+        return Some(buf);
+    }
+    let mut buf: Vec<u16> = Vec::with_capacity(2 + ends.len() * 2 + total);
+    let n = ends.len() as u32;
+    buf.push((n & 0xFFFF) as u16);
+    buf.push((n >> 16) as u16);
+    for &e in &ends {
+        buf.push((e & 0xFFFF) as u16);
+        buf.push((e >> 16) as u16);
+    }
+    buf.extend_from_slice(&data);
+    Some(buf)
+}
+
+/// Try the flat-cartesian path on already-decoded input units. Parses once;
+/// `None` means "not flat" (caller falls back). No separate depth pass:
+/// flat shapes are structurally shallow (see `flat_brace_items`), and the
+/// two recursive stringify branches carry their own CVE depth guard.
+fn try_flat_wire(units: &[u16], opts: &Options) -> Option<Result<Vec<u16>, BracesError>> {
+    let mut ast = match parse::parse(units, &opts.for_parse()) {
+        Ok(a) => a,
+        Err(e) => return Some(Err(e)),
+    };
+    let segments = match flat_segments(&mut ast, opts) {
+        Some(Ok(s)) => s,
+        Some(Err(e)) => return Some(Err(e)),
+        None => return None,
+    };
+    Some(Ok(flat_wire(&segments, opts)?))
 }
 
 pub fn expand_str_ropes(input: &str, opts: &Options) -> Result<Vec<Rope>, BracesError> {
@@ -238,31 +604,22 @@ pub fn expand_str_ropes(input: &str, opts: &Options) -> Result<Vec<Rope>, Braces
 /// units in one buffer. The fast paths pack their items directly — no
 /// rope objects are built for fill results at all.
 pub fn expand_wire(input: &str, opts: &Options) -> Result<Vec<u16>, BracesError> {
-    fn header(count: usize, total: usize) -> Vec<u16> {
-        let mut buf: Vec<u16> = Vec::with_capacity(2 + count * 2 + total);
-        let c = count as u32;
-        buf.push((c & 0xFFFF) as u16);
-        buf.push((c >> 16) as u16);
-        buf
+    // Flat-cartesian interception: only when the two zero-parse fast
+    // paths do not apply (they stay strictly faster for their shapes).
+    let units = to_units(input);
+    if !is_plain_literal(&units) && simple_range(&units).is_none() {
+        if let Some(w) = try_flat_wire(&units, opts) {
+            return w;
+        }
     }
     Ok(match expand_str_out(input, opts)? {
-        ExpandOut::Items(items) => {
-            let total: usize = items.iter().map(|v| v.len()).sum();
-            let mut buf = header(items.len(), total);
-            let mut pos: u32 = 0;
-            for it in &items {
-                pos += it.len() as u32;
-                buf.push((pos & 0xFFFF) as u16);
-                buf.push((pos >> 16) as u16);
-            }
-            for it in &items {
-                buf.extend_from_slice(it);
-            }
-            buf
-        }
+        ExpandOut::Items(items) => pack_items(&items),
         ExpandOut::Ropes(ropes) => {
             let total: usize = ropes.iter().map(|r| r.unit_len()).sum();
-            let mut buf = header(ropes.len(), total);
+            let c = ropes.len() as u32;
+            let mut buf: Vec<u16> = Vec::with_capacity(2 + ropes.len() * 2 + total);
+            buf.push((c & 0xFFFF) as u16);
+            buf.push((c >> 16) as u16);
             let mut pos: u32 = 0;
             for r in &ropes {
                 pos += r.unit_len() as u32;

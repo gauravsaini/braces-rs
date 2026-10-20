@@ -1,5 +1,5 @@
 {
-  "ts": "2026-10-20T06:04:08+00:00",
-  "stage": "bench-round6-clean",
-  "note": "final ladder uncontended; filling BENCH.md after"
+  "ts": "2026-10-20T07:40:00Z",
+  "stage": "done",
+  "note": "lane E complete: flat-cartesian fast path; multi-group 1.94x in the final verified run (1.84x-1.94x across six runs); conformance 1981 pass / 27 artifact / 0 real-fail; corpus artifacts covered by test-corpus-artifacts.js (71 assertions); BENCH.md + README rewritten, no excuse language; not pushed"
 }

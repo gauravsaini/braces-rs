@@ -1,0 +1,89 @@
+{
+  "meta": {},
+  "results": [
+    {
+      "pattern": "literal",
+      "js": 653284,
+      "rs": 1826904,
+      "speedup": 2.8
+    },
+    {
+      "pattern": "small list",
+      "js": 261050,
+      "rs": 1077382,
+      "speedup": 4.13
+    },
+    {
+      "pattern": "padded range",
+      "js": 44605,
+      "rs": 74790,
+      "speedup": 1.68
+    },
+    {
+      "pattern": "stepped range",
+      "js": 476261,
+      "rs": 698556,
+      "speedup": 1.47
+    },
+    {
+      "pattern": "alpha range",
+      "js": 424838,
+      "rs": 771352,
+      "speedup": 1.82
+    },
+    {
+      "pattern": "nested",
+      "js": 229528,
+      "rs": 294044,
+      "speedup": 1.28
+    },
+    {
+      "pattern": "big range",
+      "js": 16544,
+      "rs": 24187,
+      "speedup": 1.46
+    },
+    {
+      "pattern": "multi-group",
+      "js": 3610,
+      "rs": 6083,
+      "speedup": 1.69
+    },
+    {
+      "pattern": "compile padded",
+      "js": 664825,
+      "rs": 1096466,
+      "speedup": 1.65
+    },
+    {
+      "pattern": "compile stepped",
+      "js": 655214,
+      "rs": 1083533,
+      "speedup": 1.65
+    },
+    {
+      "pattern": "compile nested",
+      "js": 860630,
+      "rs": 969408,
+      "speedup": 1.13
+    },
+    {
+      "pattern": "default compile",
+      "js": 722066,
+      "rs": 899343,
+      "speedup": 1.25
+    },
+    {
+      "pattern": "default expand",
+      "js": 257733,
+      "rs": 410791,
+      "speedup": 1.59
+    },
+    {
+      "pattern": "expandMany",
+      "js": 1372,
+      "rs": 2743,
+      "speedup": 2
+    }
+  ]
+}

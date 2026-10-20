@@ -70,6 +70,22 @@ artifact is only that the corpus cannot express that call.
 
 ## Result (after fixes)
 
-Re-run after the padStart fix + rebuild: **1981 pass / 27 fail**, every
-remaining failure a documented corpus artifact above. The checker exits 0
-(no REAL failures).
+Re-run after the padStart fix + rebuild: **1981 pass / 27 artifact /
+0 real-fail** (checker output wording updated 2026-10-20 to say exactly
+that; exit 0 requires zero real failures AND the artifacts suite below
+to be present).
+
+## Artifact coverage — real-input equivalence tests (2026-10-20)
+
+The 27 artifacts above are now covered by executable tests, not just
+this document: `napi/test-corpus-artifacts.js` replays the generator's
+ACTUAL calls — parse/expand/compile on `null`, `undefined`, `123`,
+`true`, `{}`, `['x']`; `create` on `0` and `null` (plain and
+`{expand:true}`); the default fn on `['{a,b}', '{1..3}']`,
+`['{a,a}', 'b{a,a}']` and `[]`; and the full 5000-element array for the
+`.length` fixture — against BOTH the JS reference and this wrapper,
+asserting byte-identical return values and byte-identical error
+`name` + `message`. Result: **71 assertions, 27 cases, all identical**
+— no genuine divergence exists for these inputs; the wrapper's
+non-string dispatch reproduces the reference exactly. Wired into
+`npm test` in `napi/`.

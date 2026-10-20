@@ -47,7 +47,7 @@
   "scripts": {
     "build": "node node_modules/@napi-rs/cli/scripts/index.js build --platform --release --js binding.js --dts binding.d.ts --cargo-cwd ../crates/braces-napi",
     "build:debug": "node node_modules/@napi-rs/cli/scripts/index.js build --platform --js binding.js --dts binding.d.ts --cargo-cwd ../crates/braces-napi",
-    "test": "node test-multigroup.js"
+    "test": "node test-multigroup.js && node test-cve-2026-93687.js && node test-corpus-artifacts.js && bash ../tools/check-silence.sh"
   },
   "types": "binding.d.ts",
   "version": "0.1.0"
