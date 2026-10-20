@@ -188,19 +188,10 @@ impl Rope {
     }
 
     /// Append many ropes into `out`. Ropes produced by one expand() call
-    /// share a single arena — it is borrowed exactly once (the RefCell
-    /// borrow per rope in `write_into` is the dominant per-output cost on
-    /// multi-thousand-output expansions).
+    /// share a single arena — it is borrowed exactly once, and traversal
+    /// is iterative over a reusable index stack (recursive traversal of
+    /// ~40k rope nodes per expansion measurably dominated the pack cost).
     pub fn write_many(ropes: &[Rope], out: &mut Vec<u16>) {
-        fn rec(arena: &[RopeNode], idx: u32, out: &mut Vec<u16>) {
-            match &arena[idx as usize] {
-                RopeNode::Leaf(s) => out.extend_from_slice(s),
-                RopeNode::Concat { l, r } => {
-                    rec(arena, *l, out);
-                    rec(arena, *r, out);
-                }
-            }
-        }
         let shared = ropes.first().and_then(|r| r.arena.clone());
         let all_shared = match &shared {
             Some(a) => ropes
@@ -210,9 +201,20 @@ impl Rope {
         };
         if let (Some(a), true) = (shared, all_shared) {
             let arena = a.borrow();
+            let mut stack: Vec<u32> = Vec::with_capacity(64);
             for r in ropes {
-                if r.idx != 0 {
-                    rec(&arena, r.idx, out);
+                if r.idx == 0 {
+                    continue;
+                }
+                stack.push(r.idx);
+                while let Some(idx) = stack.pop() {
+                    match &arena[idx as usize] {
+                        RopeNode::Leaf(s) => out.extend_from_slice(s),
+                        RopeNode::Concat { l, r } => {
+                            stack.push(*r);
+                            stack.push(*l);
+                        }
+                    }
                 }
             }
         } else {
