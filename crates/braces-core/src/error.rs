@@ -23,8 +23,8 @@ pub enum BracesError {
     ExpectedString,
     /// JS `TypeError: input.padStart is not a function` — raised by
     /// fill-range's pad() when a transform returns a number for a padded
-    /// (zero-prefixed) numeric range. Message differs (documented
-    /// divergence), name matches.
+    /// (zero-prefixed) numeric range. Message is byte-identical to the
+    /// reference (verified by the exact napi conformance checker).
     PadStartOnNumber,
     /// Non-string input reached a code path that dereferences it like an
     /// AST node (expand/compile/create on null/undefined/number/bool/
@@ -56,10 +56,7 @@ impl BracesError {
                 format!("Input length ({len}), exceeds max characters ({max})")
             }
             BracesError::ExpectedString => "Expected a string".to_string(),
-            BracesError::PadStartOnNumber => {
-                "input.padStart is not a function (transform returned a number for a padded range)"
-                    .to_string()
-            }
+            BracesError::PadStartOnNumber => "input.padStart is not a function".to_string(),
             BracesError::NonStringInput(what) => {
                 format!("braces-rs: {what} input is not a string or AST")
             }
