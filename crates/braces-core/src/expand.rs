@@ -7,13 +7,14 @@
 //! machinery.
 //!
 //! Segment-join walk (perf restructure): queue entries are `Rope`s —
-//! ordered lists of shared segments (`Rc<[u16]>`) — instead of fully
-//! materialised strings. `append` then only clones segment *lists*
-//! (pointer-sized `Rc` clones) and each output string is joined exactly
-//! once, at final materialisation. The old walk rebuilt every output
-//! string at every segment append, which is quadratic on multi-group
-//! patterns (e.g. `user-{200..300}/project-{a,b,c}-{1..10}`) where V8's
-//! rope (cons-string) concatenation made the JS reference cheaper.
+//! binary trees of shared segments (`Rc<[u16]>`) — instead of fully
+//! materialised strings. `append` is then a single `Rc` allocation per
+//! concatenation (the V8 cons-string equivalent) and each output string
+//! is joined exactly once, at final materialisation. The old walk
+//! rebuilt every output string at every segment append, which is
+//! quadratic on multi-group patterns (e.g.
+//! `user-{200..300}/project-{a,b,c}-{1..10}`) where V8's rope
+//! concatenation made the JS reference cheaper.
 
 use crate::ast::{Ast, NodeId, NodeType};
 use crate::error::BracesError;
@@ -31,61 +32,110 @@ fn seg_of(s: &[u16]) -> Seg {
     Rc::from(s)
 }
 
-/// An output string under construction: a list of shared segments.
-/// Cloning a `Rope` copies the segment list (one `Rc` bump per segment),
-/// never the segment bytes.
-#[derive(Clone, Default, Debug)]
+#[derive(Debug)]
+enum RopeNode {
+    Leaf(Seg),
+    Concat(Rope, Rope),
+}
+
+/// An output string under construction: a binary tree of shared
+/// segments. Cloning a `Rope` is one `Rc` bump; concatenating is one
+/// `Rc` allocation — segment bytes are never copied until the single
+/// final join (`to_units` / `write_into`).
+#[derive(Clone, Debug)]
 pub struct Rope {
-    segs: Vec<Seg>,
+    node: Option<Rc<RopeNode>>,
+    len: usize, // total UTF-16 units
+}
+
+impl Default for Rope {
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 impl Rope {
-    fn empty() -> Self {
-        Rope { segs: Vec::new() }
+    pub fn empty() -> Self {
+        Rope { node: None, len: 0 }
     }
 
-    fn from_units(v: Vec<u16>) -> Self {
+    pub fn from_units(v: Vec<u16>) -> Self {
         if v.is_empty() {
             return Rope::empty();
         }
-        Rope { segs: vec![Rc::from(v)] }
+        let len = v.len();
+        Rope {
+            node: Some(Rc::new(RopeNode::Leaf(Rc::from(v)))),
+            len,
+        }
     }
 
-    /// `self + other` as a new rope (segment lists concatenated).
+    fn leaf(seg: Seg) -> Self {
+        let len = seg.len();
+        Rope {
+            node: Some(Rc::new(RopeNode::Leaf(seg))),
+            len,
+        }
+    }
+
+    /// Total length in UTF-16 code units.
+    pub fn unit_len(&self) -> usize {
+        self.len
+    }
+
+    /// `self + other` as a new rope (one allocation, no byte copies).
     fn concat(&self, other: &Rope) -> Rope {
-        let mut segs = Vec::with_capacity(self.segs.len() + other.segs.len());
-        segs.extend_from_slice(&self.segs);
-        segs.extend_from_slice(&other.segs);
-        Rope { segs }
+        match (&self.node, &other.node) {
+            (None, _) => other.clone(),
+            (_, None) => self.clone(),
+            (Some(_), Some(_)) => Rope {
+                node: Some(Rc::new(RopeNode::Concat(self.clone(), other.clone()))),
+                len: self.len + other.len,
+            },
+        }
     }
 
     /// `self + "{" + inner + "}"` — the enclose path for invalid braces.
     fn concat_enclosed(&self, inner: &Rope) -> Rope {
-        let mut segs = Vec::with_capacity(self.segs.len() + inner.segs.len() + 2);
-        segs.extend_from_slice(&self.segs);
-        segs.push(seg_of(&[b'{' as u16]));
-        segs.extend_from_slice(&inner.segs);
-        segs.push(seg_of(&[b'}' as u16]));
-        Rope { segs }
+        self.concat(&Rope::leaf(seg_of(&[b'{' as u16])))
+            .concat(inner)
+            .concat(&Rope::leaf(seg_of(&[b'}' as u16])))
     }
 
     /// `"{" + self + "}"` as a single rope (q-empty enclose branch).
     fn enclosed(&self) -> Rope {
-        let mut segs = Vec::with_capacity(self.segs.len() + 2);
-        segs.push(seg_of(&[b'{' as u16]));
-        segs.extend_from_slice(&self.segs);
-        segs.push(seg_of(&[b'}' as u16]));
-        Rope { segs }
+        Rope::leaf(seg_of(&[b'{' as u16]))
+            .concat(self)
+            .concat(&Rope::leaf(seg_of(&[b'}' as u16])))
     }
 
-    /// Join the segments into the final string — the one and only full
-    /// copy of the output bytes.
-    fn materialize(&self) -> Vec<u16> {
-        let total: usize = self.segs.iter().map(|s| s.len()).sum();
-        let mut out = Vec::with_capacity(total);
-        for s in &self.segs {
-            out.extend_from_slice(s);
+    /// Append this rope's bytes to `out` — the one and only full copy of
+    /// the output bytes. Traversal is recursive; depth is bounded by the
+    /// pattern's segment count (concat chains lean right by construction
+    /// and realistic patterns stay well under a hundred deep).
+    pub fn write_into(&self, out: &mut Vec<u16>) {
+        fn rec(node: &RopeNode, out: &mut Vec<u16>) {
+            match node {
+                RopeNode::Leaf(s) => out.extend_from_slice(s),
+                RopeNode::Concat(l, r) => {
+                    if let Some(n) = &l.node {
+                        rec(n, out);
+                    }
+                    if let Some(n) = &r.node {
+                        rec(n, out);
+                    }
+                }
+            }
         }
+        if let Some(n) = &self.node {
+            rec(n, out);
+        }
+    }
+
+    /// Join the segments into the final string.
+    pub fn to_units(&self) -> Vec<u16> {
+        let mut out = Vec::with_capacity(self.len);
+        self.write_into(&mut out);
         out
     }
 }
@@ -293,8 +343,10 @@ impl<'a> Expander<'a> {
     }
 }
 
-/// Expand an AST. Returns the flat list of expansion strings.
-pub fn expand(ast: &mut Ast, opts: &Options) -> Result<Vec<Vec<u16>>, BracesError> {
+/// Expand an AST. Returns the flat list of expanded output ropes;
+/// callers join them (`Rope::to_units` / `write_into`) at the boundary
+/// where real strings are needed.
+pub fn expand(ast: &mut Ast, opts: &Options) -> Result<Vec<Rope>, BracesError> {
     let n = ast.nodes.len();
     let mut expander = Expander {
         ast,
@@ -304,10 +356,7 @@ pub fn expand(ast: &mut Ast, opts: &Options) -> Result<Vec<Vec<u16>>, BracesErro
     let root = expander.ast.root;
     expander.walk(root, None)?;
     let q = std::mem::take(&mut expander.queues[root]);
-    Ok(flatten::<Rope>(q)
-        .into_iter()
-        .map(|r| r.materialize())
-        .collect())
+    Ok(flatten::<Rope>(q))
 }
 
 #[cfg(test)]
@@ -315,9 +364,11 @@ mod tests {
     use super::*;
 
     fn rope_of(parts: &[&str]) -> Rope {
-        Rope {
-            segs: parts.iter().map(|p| seg_of(&units(p))).collect(),
+        let mut r = Rope::empty();
+        for p in parts {
+            r = r.concat(&Rope::from_units(units(p)));
         }
+        r
     }
 
     fn s(v: &[u16]) -> String {
@@ -329,27 +380,27 @@ mod tests {
         let a = rope_of(&["user-", "200"]);
         let b = rope_of(&["/project-"]);
         let c = a.concat(&b);
-        assert_eq!(s(&c.materialize()), "user-200/project-");
+        assert_eq!(s(&c.to_units()), "user-200/project-");
         // sources are untouched (shared segments, no rebuild)
-        assert_eq!(s(&a.materialize()), "user-200");
-        assert_eq!(s(&b.materialize()), "/project-");
+        assert_eq!(s(&a.to_units()), "user-200");
+        assert_eq!(s(&b.to_units()), "/project-");
     }
 
     #[test]
     fn concat_with_empty_is_identity() {
         let a = rope_of(&["x"]);
-        assert_eq!(s(&a.concat(&Rope::empty()).materialize()), "x");
-        assert_eq!(s(&Rope::empty().concat(&a).materialize()), "x");
-        assert_eq!(s(&Rope::empty().materialize()), "");
+        assert_eq!(s(&a.concat(&Rope::empty()).to_units()), "x");
+        assert_eq!(s(&Rope::empty().concat(&a).to_units()), "x");
+        assert_eq!(s(&Rope::empty().to_units()), "");
     }
 
     #[test]
     fn enclosed_wraps_inner_in_literal_braces() {
         let pre = rope_of(&["pre-"]);
         let inner = rope_of(&["a,b"]);
-        assert_eq!(s(&pre.concat_enclosed(&inner).materialize()), "pre-{a,b}");
-        assert_eq!(s(&inner.enclosed().materialize()), "{a,b}");
-        assert_eq!(s(&Rope::empty().enclosed().materialize()), "{}");
+        assert_eq!(s(&pre.concat_enclosed(&inner).to_units()), "pre-{a,b}");
+        assert_eq!(s(&inner.enclosed().to_units()), "{a,b}");
+        assert_eq!(s(&Rope::empty().enclosed().to_units()), "{}");
     }
 
     #[test]
@@ -365,7 +416,7 @@ mod tests {
         let out = append(q, stash, false);
         let flat: Vec<String> = flatten::<Rope>(out)
             .iter()
-            .map(|r| s(&r.materialize()))
+            .map(|r| s(&r.to_units()))
             .collect();
         assert_eq!(flat, ["a1", "a2", "b1", "b2"]);
     }
@@ -377,7 +428,7 @@ mod tests {
         let out = append(Some(QueueVal::Many(vec![])), stash, true);
         let flat: Vec<String> = flatten::<Rope>(out)
             .iter()
-            .map(|r| s(&r.materialize()))
+            .map(|r| s(&r.to_units()))
             .collect();
         assert_eq!(flat, ["{a,b}"]);
     }

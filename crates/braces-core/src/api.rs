@@ -9,6 +9,7 @@ use crate::ast::Ast;
 use crate::compile;
 use crate::error::BracesError;
 use crate::expand;
+pub use crate::expand::Rope;
 use crate::jsnum;
 use crate::options::Options;
 use crate::parse;
@@ -173,13 +174,23 @@ pub fn expand_str(input: &str, opts: &Options) -> Result<Vec<String>, BracesErro
 
 /// Same, but returns UTF-16 units (lets the napi layer skip a transcode).
 pub fn expand_units(input: &str, opts: &Options) -> Result<Vec<Vec<u16>>, BracesError> {
+    Ok(expand_str_ropes(input, opts)?
+        .iter()
+        .map(|r| r.to_units())
+        .collect())
+}
+
+/// Expand to output **ropes** (segment trees) without materialising —
+/// the napi layer packs results straight from the ropes, so multi-output
+/// expansions never pay a per-string allocation + copy.
+pub fn expand_str_ropes(input: &str, opts: &Options) -> Result<Vec<Rope>, BracesError> {
     let units = to_units(input);
     if is_plain_literal(&units) && opts.transform.is_none() {
         check_max_length(&units, opts)?;
         if units.is_empty() {
-            return Ok(apply_post_units(Vec::new(), opts));
+            return Ok(apply_post_ropes(Vec::new(), opts));
         }
-        return Ok(apply_post_units(vec![units], opts));
+        return Ok(apply_post_ropes(vec![Rope::from_units(units)], opts));
     }
     if let Some((s, e, st)) = simple_range(&units) {
         check_max_length(&units, opts)?;
@@ -192,17 +203,31 @@ pub fn expand_units(input: &str, opts: &Options) -> Result<Vec<Vec<u16>>, Braces
         }
         let fopts = crate::fill::FillOptions::from_options(opts, false);
         return match crate::fill::fill(&s, Some(&e), st.as_deref(), &fopts)? {
-            crate::fill::FillOut::List(items) if !items.is_empty() => {
-                Ok(apply_post_units(items, opts))
-            }
+            crate::fill::FillOut::List(items) if !items.is_empty() => Ok(apply_post_ropes(
+                items.into_iter().map(Rope::from_units).collect(),
+                opts,
+            )),
             // Reference fallback: an empty fill stringifies the brace
             // verbatim (simple-range chars need no re-escaping).
-            crate::fill::FillOut::List(_) => Ok(apply_post_units(vec![units], opts)),
+            crate::fill::FillOut::List(_) => {
+                Ok(apply_post_ropes(vec![Rope::from_units(units)], opts))
+            }
             crate::fill::FillOut::Regex(_) => unreachable!(),
         };
     }
     let mut ast = parse_units(&units, opts)?;
-    expand_ast_units(&mut ast, opts)
+    expand_ast_ropes(&mut ast, opts)
+}
+
+fn apply_post_ropes(mut items: Vec<Rope>, opts: &Options) -> Vec<Rope> {
+    if opts.noempty {
+        items.retain(|r| r.unit_len() > 0);
+    }
+    if opts.nodupes {
+        let mut seen = HashSet::with_capacity(items.len());
+        items.retain(|r| seen.insert(r.to_units()));
+    }
+    items
 }
 
 fn apply_post_units(mut items: Vec<Vec<u16>>, opts: &Options) -> Vec<Vec<u16>> {
@@ -222,8 +247,16 @@ pub fn expand_ast(ast: &mut Ast, opts: &Options) -> Result<Vec<String>, BracesEr
 }
 
 pub fn expand_ast_units(ast: &mut Ast, opts: &Options) -> Result<Vec<Vec<u16>>, BracesError> {
+    Ok(expand_ast_ropes(ast, opts)?
+        .iter()
+        .map(|r| r.to_units())
+        .collect())
+}
+
+/// Expand an AST to ropes (post-processing applied, no materialisation).
+pub fn expand_ast_ropes(ast: &mut Ast, opts: &Options) -> Result<Vec<Rope>, BracesError> {
     let items = expand::expand(ast, opts)?;
-    Ok(apply_post_units(items, opts))
+    Ok(apply_post_ropes(items, opts))
 }
 
 /// `braces.compile(input, options)` — returns the regex-source *string*

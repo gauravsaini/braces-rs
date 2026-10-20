@@ -267,7 +267,7 @@ fn opts_arg(obj: Option<JsObject>, env: Env) -> Result<Options> {
 #[napi]
 pub fn expand(pattern: String, options: Option<JsObject>, env: Env) -> Result<U16String> {
     let opts = opts_arg(options, env)?;
-    let r = api::expand_units(&pattern, &opts).map(pack_str).map_err(err);
+    let r = api::expand_str_ropes(&pattern, &opts).map(pack_ropes).map_err(err);
     clear_transform();
     r
 }
@@ -322,6 +322,16 @@ pub fn braces_fn(
     env: Env,
 ) -> Result<U16String> {
     let opts = opts_arg(options, env)?;
+    // String input in expand mode takes the rope path (same condition
+    // braces_units itself uses to route to expand_units: non-empty,
+    // >= 3 UTF-16 units); everything else uses the materialised path.
+    if let Either::A(s) = &input {
+        if opts.expand && !s.is_empty() && s.encode_utf16().count() >= 3 {
+            let r = api::expand_str_ropes(s, &opts).map(pack_ropes).map_err(err);
+            clear_transform();
+            return r;
+        }
+    }
     let input = match input {
         Either::A(s) => api::Input::Str(s),
         Either::B(v) => api::Input::Arr(v),
@@ -457,7 +467,7 @@ pub fn expand_ast(
 ) -> Result<U16String> {
     let opts = opts_arg(options, env)?;
     let mut ast = ast_from_object(&ast_obj)?;
-    let r = api::expand_ast_units(&mut ast, &opts).map(pack_str).map_err(err);
+    let r = api::expand_ast_ropes(&mut ast, &opts).map(pack_ropes).map_err(err);
     clear_transform();
     r
 }
@@ -517,6 +527,26 @@ fn pack_str(items: Vec<Vec<u16>>) -> U16String {
     }
     for it in items {
         buf.extend_from_slice(&it);
+    }
+    U16String(buf)
+}
+/// Pack output ropes into the same wire format as [`pack_str`], writing
+/// each rope's segments straight into the buffer — multi-output
+/// expansions skip the per-string Vec<u16> materialisation entirely.
+fn pack_ropes(items: Vec<api::Rope>) -> U16String {
+    let count = items.len() as u32;
+    let total: usize = items.iter().map(|r| r.unit_len()).sum();
+    let mut buf: Vec<u16> = Vec::with_capacity(2 + items.len() * 2 + total);
+    buf.push((count & 0xFFFF) as u16);
+    buf.push((count >> 16) as u16);
+    let mut pos: u32 = 0;
+    for it in &items {
+        pos += it.unit_len() as u32;
+        buf.push((pos & 0xFFFF) as u16);
+        buf.push((pos >> 16) as u16);
+    }
+    for it in &items {
+        it.write_into(&mut buf);
     }
     U16String(buf)
 }
