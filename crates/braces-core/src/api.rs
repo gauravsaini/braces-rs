@@ -183,14 +183,22 @@ pub fn expand_units(input: &str, opts: &Options) -> Result<Vec<Vec<u16>>, Braces
 /// Expand to output **ropes** (segment trees) without materialising —
 /// the napi layer packs results straight from the ropes, so multi-output
 /// expansions never pay a per-string allocation + copy.
-pub fn expand_str_ropes(input: &str, opts: &Options) -> Result<Vec<Rope>, BracesError> {
+/// Internal expand result: the two zero-waste fast paths (plain
+/// literal, simple-range fill) produce plain item vectors; only the
+/// general walk produces ropes.
+enum ExpandOut {
+    Items(Vec<Vec<u16>>),
+    Ropes(Vec<Rope>),
+}
+
+fn expand_str_out(input: &str, opts: &Options) -> Result<ExpandOut, BracesError> {
     let units = to_units(input);
     if is_plain_literal(&units) && opts.transform.is_none() {
         check_max_length(&units, opts)?;
         if units.is_empty() {
-            return Ok(apply_post_ropes(Vec::new(), opts));
+            return Ok(ExpandOut::Items(apply_post_units(Vec::new(), opts)));
         }
-        return Ok(apply_post_ropes(vec![Rope::from_units(units)], opts));
+        return Ok(ExpandOut::Items(apply_post_units(vec![units], opts)));
     }
     if let Some((s, e, st)) = simple_range(&units) {
         check_max_length(&units, opts)?;
@@ -204,18 +212,67 @@ pub fn expand_str_ropes(input: &str, opts: &Options) -> Result<Vec<Rope>, Braces
         let fopts = crate::fill::FillOptions::from_options(opts, false);
         return match crate::fill::fill(&s, Some(&e), st.as_deref(), &fopts)? {
             crate::fill::FillOut::List(items) if !items.is_empty() => {
-                Ok(apply_post_ropes(Rope::many_from_units(items), opts))
+                Ok(ExpandOut::Items(apply_post_units(items, opts)))
             }
             // Reference fallback: an empty fill stringifies the brace
             // verbatim (simple-range chars need no re-escaping).
             crate::fill::FillOut::List(_) => {
-                Ok(apply_post_ropes(vec![Rope::from_units(units)], opts))
+                Ok(ExpandOut::Items(apply_post_units(vec![units], opts)))
             }
             crate::fill::FillOut::Regex(_) => unreachable!(),
         };
     }
     let mut ast = parse_units(&units, opts)?;
-    expand_ast_ropes(&mut ast, opts)
+    Ok(ExpandOut::Ropes(expand_ast_ropes(&mut ast, opts)?))
+}
+
+pub fn expand_str_ropes(input: &str, opts: &Options) -> Result<Vec<Rope>, BracesError> {
+    Ok(match expand_str_out(input, opts)? {
+        ExpandOut::Items(items) => items.into_iter().map(Rope::from_units).collect(),
+        ExpandOut::Ropes(ropes) => ropes,
+    })
+}
+
+/// Expand straight into the packed wire format used by the napi layer:
+/// `[count: u32][cumulative offsets: u32 * count][data]`, all as UTF-16
+/// units in one buffer. The fast paths pack their items directly — no
+/// rope objects are built for fill results at all.
+pub fn expand_wire(input: &str, opts: &Options) -> Result<Vec<u16>, BracesError> {
+    fn header(count: usize, total: usize) -> Vec<u16> {
+        let mut buf: Vec<u16> = Vec::with_capacity(2 + count * 2 + total);
+        let c = count as u32;
+        buf.push((c & 0xFFFF) as u16);
+        buf.push((c >> 16) as u16);
+        buf
+    }
+    Ok(match expand_str_out(input, opts)? {
+        ExpandOut::Items(items) => {
+            let total: usize = items.iter().map(|v| v.len()).sum();
+            let mut buf = header(items.len(), total);
+            let mut pos: u32 = 0;
+            for it in &items {
+                pos += it.len() as u32;
+                buf.push((pos & 0xFFFF) as u16);
+                buf.push((pos >> 16) as u16);
+            }
+            for it in &items {
+                buf.extend_from_slice(it);
+            }
+            buf
+        }
+        ExpandOut::Ropes(ropes) => {
+            let total: usize = ropes.iter().map(|r| r.unit_len()).sum();
+            let mut buf = header(ropes.len(), total);
+            let mut pos: u32 = 0;
+            for r in &ropes {
+                pos += r.unit_len() as u32;
+                buf.push((pos & 0xFFFF) as u16);
+                buf.push((pos >> 16) as u16);
+            }
+            Rope::write_many(&ropes, &mut buf);
+            buf
+        }
+    })
 }
 
 fn apply_post_ropes(mut items: Vec<Rope>, opts: &Options) -> Vec<Rope> {

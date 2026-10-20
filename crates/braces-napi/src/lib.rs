@@ -267,7 +267,7 @@ fn opts_arg(obj: Option<JsObject>, env: Env) -> Result<Options> {
 #[napi]
 pub fn expand(pattern: String, options: Option<JsObject>, env: Env) -> Result<U16String> {
     let opts = opts_arg(options, env)?;
-    let r = api::expand_str_ropes(&pattern, &opts).map(pack_ropes).map_err(err);
+    let r = api::expand_wire(&pattern, &opts).map(U16String).map_err(err);
     clear_transform();
     r
 }
@@ -327,7 +327,7 @@ pub fn braces_fn(
     // >= 3 UTF-16 units); everything else uses the materialised path.
     if let Either::A(s) = &input {
         if opts.expand && !s.is_empty() && s.encode_utf16().count() >= 3 {
-            let r = api::expand_str_ropes(s, &opts).map(pack_ropes).map_err(err);
+            let r = api::expand_wire(s, &opts).map(U16String).map_err(err);
             clear_transform();
             return r;
         }
@@ -548,6 +548,7 @@ fn pack_ropes(items: Vec<api::Rope>) -> U16String {
     api::Rope::write_many(&items, &mut buf);
     U16String(buf)
 }
+
 #[napi(object)]
 pub struct PackedStrings {
     pub offsets: Uint32Array,
