@@ -43,18 +43,13 @@ jobs:
           - host: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             arch: arm64
-            setup_zig: true
-            build: pnpm exec napi build --platform --release --target aarch64-unknown-linux-gnu --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts --zig
+            cross_aarch64: true
+            build: pnpm exec napi build --platform --release --target aarch64-unknown-linux-gnu --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
             arch: x64
             setup_zig: true
             build: pnpm exec napi build --platform --release --target x86_64-unknown-linux-musl --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts --zig
-          - host: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-            arch: arm64
-            setup_zig: true
-            build: pnpm exec napi build --platform --release --target aarch64-unknown-linux-musl --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts --zig
 
     name: build - ${{ matrix.settings.target }}
     runs-on: ${{ matrix.settings.host }}
@@ -77,6 +72,10 @@ jobs:
 
       - name: Add Rust target
         run: rustup target add ${{ matrix.settings.target }}
+
+      - name: Install aarch64 cross compiler
+        if: ${{ matrix.settings.cross_aarch64 }}
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Install musl-tools
         if: contains(matrix.settings.target, 'musl') && matrix.settings.host == 'ubuntu-latest'
@@ -106,6 +105,9 @@ jobs:
         run: |
           cd napi
           ${{ matrix.settings.build }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
         shell: bash
 
       - name: Upload artifact
