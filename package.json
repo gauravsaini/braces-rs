@@ -2,7 +2,7 @@
   "name": "braces-rs",
   "version": "1.0.0",
   "description": "Fast Rust-powered drop-in replacement for micromatch/braces",
-  "private": true,
+  "private": false,
   "scripts": {
     "prepare": "husky",
     "format": "prettier --write .",
