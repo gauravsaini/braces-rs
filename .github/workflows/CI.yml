@@ -27,36 +27,47 @@ jobs:
           - host: macos-latest
             target: x86_64-apple-darwin
             arch: x64
-            build: pnpm exec napi build --platform --release --target x86_64-apple-darwin --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts
+            build: pnpm build --target x86_64-apple-darwin
           - host: macos-latest
             target: aarch64-apple-darwin
             arch: arm64
-            build: pnpm exec napi build --platform --release --target aarch64-apple-darwin --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts
+            build: pnpm build --target aarch64-apple-darwin
           - host: windows-latest
             target: x86_64-pc-windows-msvc
             arch: x64
-            build: pnpm exec napi build --platform --release --target x86_64-pc-windows-msvc --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts
-          - host: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            build: pnpm build --target x86_64-pc-windows-msvc
+          - host: windows-latest
+            target: aarch64-pc-windows-msvc
             arch: x64
-            build: pnpm exec napi build --platform --release --target x86_64-unknown-linux-gnu --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts
-          - host: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            arch: arm64
-            cross_aarch64: true
-            build: pnpm exec napi build --platform --release --target aarch64-unknown-linux-gnu --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts
-          - host: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            arch: x64
-            setup_zig: true
-            build: pnpm exec napi build --platform --release --target x86_64-unknown-linux-musl --cargo-cwd ../crates/braces-napi --js binding.js --dts binding.d.ts --zig
+            build: pnpm build --target aarch64-pc-windows-msvc
+          # Linux builds disabled due to CI runner availability issues
+          # - host: ubuntu-20.04
+          #   target: x86_64-unknown-linux-gnu
+          #   arch: x64
+          #   build: pnpm build --target x86_64-unknown-linux-gnu
+          # - host: ubuntu-20.04
+          #   target: aarch64-unknown-linux-gnu
+          #   arch: x64
+          #   build: pnpm build --target aarch64-unknown-linux-gnu --use-napi-cross
+          # - host: ubuntu-20.04
+          #   target: x86_64-unknown-linux-musl
+          #   arch: x64
+          #   setup_zig: true
+          #   build: pnpm build --target x86_64-unknown-linux-musl --zig
+          # - host: ubuntu-20.04
+          #   target: aarch64-unknown-linux-musl
+          #   arch: x64
+          #   setup_zig: true
+          #   build: pnpm build --target aarch64-unknown-linux-musl --zig
 
-    name: build - ${{ matrix.settings.target }}
+    name: stable - ${{ matrix.settings.target }} - node@22
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
-      - name: Install pnpm
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
       - name: Setup node
@@ -65,21 +76,14 @@ jobs:
           node-version: 22
           architecture: ${{ matrix.settings.arch }}
 
-      - name: Install Rust
+      - name: Install
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable
           targets: ${{ matrix.settings.target }}
 
       - name: Add Rust target
         run: rustup target add ${{ matrix.settings.target }}
-
-      - name: Install aarch64 cross compiler
-        if: ${{ matrix.settings.cross_aarch64 }}
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      - name: Install musl-tools
-        if: contains(matrix.settings.target, 'musl') && matrix.settings.host == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - uses: goto-bus-stop/setup-zig@v2
         if: ${{ matrix.settings.setup_zig }}
@@ -93,6 +97,7 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
+            .cargo-cache
             target/
           key: ${{ matrix.settings.target }}-cargo-${{ matrix.settings.host }}
 
@@ -102,23 +107,18 @@ jobs:
           cd napi && pnpm install
 
       - name: Build
-        run: |
-          cd napi
-          ${{ matrix.settings.build }}
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: ${{ matrix.settings.build }}
         shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.settings.target }}
-          path: napi/*.node
+          path: napi/${{ env.APP_NAME }}.*.node
           if-no-files-found: error
 
-  test:
-    name: test - ${{ matrix.settings.target }}
+  test-macOS-windows-binding:
+    name: Test bindings on ${{ matrix.settings.target }} - node@${{ matrix.node }}
     needs:
       - build
     strategy:
@@ -134,20 +134,21 @@ jobs:
           - host: windows-latest
             target: x86_64-pc-windows-msvc
             arch: x64
-          - host: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            arch: x64
+        node:
+          - '22'
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
-      - name: Install pnpm
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
       - name: Setup node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           architecture: ${{ matrix.settings.arch }}
 
       - name: Install dependencies
@@ -155,28 +156,31 @@ jobs:
           pnpm install
           cd napi && pnpm install
 
-      - name: Download artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           name: bindings-${{ matrix.settings.target }}
           path: napi
 
-      - name: Run tests
-        run: |
-          cd napi
-          pnpm test
+      - name: List packages
+        run: ls -R napi
         shell: bash
 
+      - name: Test bindings
+        run: pnpm test
+
   publish:
-    name: publish
+    name: Publish
     runs-on: ubuntu-latest
     needs:
-      - test
+      - test-macOS-windows-binding
     if: success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
-      - name: Install pnpm
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
       - name: Setup node
@@ -209,10 +213,13 @@ jobs:
           npm pack --dry-run
         shell: bash
 
-      - name: Publish package
+      - name: Publish
         run: |
           cd napi
           npm config set provenance true
-          npm publish --access public --provenance
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            npm publish --access public --provenance
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

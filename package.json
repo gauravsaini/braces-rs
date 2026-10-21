@@ -6,7 +6,9 @@
   "scripts": {
     "prepare": "husky",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "build": "pnpm --dir napi run build",
+    "test": "pnpm --dir napi run test"
   },
   "lint-staged": {
     "*.{js,mjs,cjs,ts,json,md,yaml,yml}": [
