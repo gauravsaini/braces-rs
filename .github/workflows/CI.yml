@@ -75,6 +75,13 @@ jobs:
         with:
           targets: ${{ matrix.settings.target }}
 
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.settings.target }}
+
+      - name: Install musl-tools
+        if: contains(matrix.settings.target, 'musl') && matrix.settings.host == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - uses: goto-bus-stop/setup-zig@v2
         if: ${{ matrix.settings.setup_zig }}
         with:
