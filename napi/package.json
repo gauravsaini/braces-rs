@@ -4,7 +4,8 @@
   },
   "description": "Fast Rust-powered drop-in replacement for micromatch/braces — brace expansion, 1.2–3.6x faster, byte-identical output",
   "devDependencies": {
-    "@napi-rs/cli": "2.18.4"
+    "@napi-rs/cli": "2.18.4",
+    "braces": "3.0.3"
   },
   "engines": {
     "node": ">= 14"
@@ -27,6 +28,11 @@
     "rust"
   ],
   "license": "MIT",
+  "author": "Gaurav Saini <me@gauravsaini.com>",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "main": "index.js",
   "name": "braces-rs",
   "napi": {

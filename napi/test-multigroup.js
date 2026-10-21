@@ -14,11 +14,13 @@
 const assert = require('node:assert');
 const path = require('node:path');
 
+const fs = require('node:fs');
 const ours = require('./index.js');
-const refPath =
-  process.env.BRACES_REF ||
-  process.argv[2] ||
-  path.join(__dirname, '..', '..', 'micromatch-braces');
+let refPath = process.env.BRACES_REF || process.argv[2];
+if (!refPath) {
+  const localRef = path.join(__dirname, '..', '..', 'micromatch-braces');
+  refPath = fs.existsSync(localRef) ? localRef : 'braces';
+}
 const ref = require(refPath);
 
 const MULTI = 'user-{200..300}/project-{a,b,c}-{1..10}';

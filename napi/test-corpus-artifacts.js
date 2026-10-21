@@ -27,9 +27,13 @@
  * (defaults to $BRACES_REF or the box reference checkout).
  */
 const assert = require('assert');
+const fs = require('fs');
 
-const refPath =
-  process.argv[2] || process.env.BRACES_REF || '/mnt/sdb1/braces-rs/micromatch-braces';
+let refPath = process.argv[2] || process.env.BRACES_REF;
+if (!refPath) {
+  const localRef = '/mnt/sdb1/braces-rs/micromatch-braces';
+  refPath = fs.existsSync(localRef) ? localRef : 'braces';
+}
 const ref = require(refPath);
 const ours = require('./index.js');
 
