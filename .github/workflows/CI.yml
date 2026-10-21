@@ -75,7 +75,7 @@ jobs:
 
       - name: Install aarch64 cross compiler
         if: ${{ matrix.settings.cross_aarch64 }}
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Install musl-tools
         if: contains(matrix.settings.target, 'musl') && matrix.settings.host == 'ubuntu-latest'
